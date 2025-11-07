@@ -354,6 +354,36 @@ const add = async (win, pathname, collectionUid, collectionPath, useWorkerThread
       watcher.markFileAsProcessed(win, collectionUid, pathname);
     }
   }
+
+  // Git auto-stage: Stage new file if git is enabled
+  try {
+    const { gitConfigStore } = require('../store/git-config');
+    const gitService = require('../git/git-service');
+
+    const gitConfig = gitConfigStore.getGitConfig(collectionPath);
+
+    if (gitConfig && gitConfig.enabled && gitConfig.autoStage) {
+      const isRepo = await gitService.isGitRepo(collectionPath);
+
+      if (isRepo) {
+        // Stage the new file
+        await gitService.stageFile(collectionPath, pathname);
+
+        // Get updated status
+        const status = await gitService.getStatus(collectionPath);
+
+        // Send status to renderer
+        win.webContents.send('main:git-status-updated', {
+          collectionUid,
+          collectionPath,
+          pendingChanges: status.staged.length + status.modified.length,
+          status
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Git auto-stage error:', error);
+  }
 };
 
 const addDirectory = async (win, pathname, collectionUid, collectionPath) => {
@@ -511,6 +541,36 @@ const change = async (win, pathname, collectionUid, collectionPath) => {
     } catch (err) {
       console.error(err);
     }
+  }
+
+  // Git auto-stage: Stage changed file if git is enabled
+  try {
+    const { gitConfigStore } = require('../store/git-config');
+    const gitService = require('../git/git-service');
+
+    const gitConfig = gitConfigStore.getGitConfig(collectionPath);
+
+    if (gitConfig && gitConfig.enabled && gitConfig.autoStage) {
+      const isRepo = await gitService.isGitRepo(collectionPath);
+
+      if (isRepo) {
+        // Stage the changed file
+        await gitService.stageFile(collectionPath, pathname);
+
+        // Get updated status
+        const status = await gitService.getStatus(collectionPath);
+
+        // Send status to renderer
+        win.webContents.send('main:git-status-updated', {
+          collectionUid,
+          collectionPath,
+          pendingChanges: status.staged.length + status.modified.length,
+          status
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Git auto-stage error:', error);
   }
 };
 

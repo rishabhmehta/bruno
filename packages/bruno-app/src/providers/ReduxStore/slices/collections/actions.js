@@ -65,6 +65,8 @@ import { buildPersistedEnvVariables } from 'utils/environments';
 import { safeParseJSON, safeStringifyJSON } from 'utils/common/index';
 import { addTab } from 'providers/ReduxStore/slices/tabs';
 import { updateSettingsSelectedTab } from './index';
+import { initializeGitState, setGitEnabled, updateGitStatus } from 'providers/ReduxStore/slices/git';
+import { fetchGitStatus } from 'providers/ReduxStore/slices/git/actions';
 
 export const renameCollection = (newName, collectionUid) => (dispatch, getState) => {
   const state = getState();
@@ -1684,6 +1686,24 @@ export const openCollectionEvent = (uid, pathname, brunoConfig) => (dispatch, ge
           if (state.app.sidebarCollapsed) {
             dispatch(toggleSidebarCollapse());
           }
+
+          // Initialize git state for this collection
+          dispatch(initializeGitState({ collectionUid: uid, collectionPath: pathname }));
+
+          // Check if git is already initialized and load status
+          ipcRenderer.invoke('renderer:git-is-repo', pathname)
+            .then((response) => {
+              if (response.success && response.isRepo) {
+                dispatch(setGitEnabled({ collectionUid: uid, enabled: true }));
+
+                // Fetch git status and remote info
+                return dispatch(fetchGitStatus(uid, pathname));
+              }
+            })
+            .catch((error) => {
+              console.warn('Error checking git status for collection:', error);
+            });
+
           resolve();
         })
         .catch(reject);

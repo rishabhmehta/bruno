@@ -8,6 +8,7 @@ import notificationsReducer from './slices/notifications';
 import globalEnvironmentsReducer from './slices/global-environments';
 import logsReducer from './slices/logs';
 import performanceReducer from './slices/performance';
+import gitReducer from './slices/git';
 import { draftDetectMiddleware } from './middlewares/draft/middleware';
 
 const isDevEnv = () => {
@@ -27,7 +28,8 @@ export const store = configureStore({
     notifications: notificationsReducer,
     globalEnvironments: globalEnvironmentsReducer,
     logs: logsReducer,
-    performance: performanceReducer
+    performance: performanceReducer,
+    git: gitReducer
   },
   middleware: (getDefaultMiddleware) => getDefaultMiddleware().concat(middleware)
 });
