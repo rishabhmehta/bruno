@@ -103,7 +103,17 @@ environments/
     const relativePath = path.isAbsolute(filePath)
       ? path.relative(collectionPath, filePath)
       : filePath;
-    await git.reset(['HEAD', relativePath]);
+
+    // Check if there are any commits in the repository
+    try {
+      await git.revparse(['HEAD']);
+      // HEAD exists, use reset
+      await git.reset(['HEAD', relativePath]);
+    } catch (error) {
+      // No commits yet (brand new repo), use rm --cached
+      await git.raw(['rm', '--cached', relativePath]);
+    }
+
     return { success: true };
   }
 
