@@ -56,6 +56,9 @@ export const initializeGitRepo = (collectionUid, collectionPath) => (dispatch) =
       dispatch(setGitError({ collectionUid, error: error.message }));
       toast.error(`Error initializing git: ${error.message}`);
       throw error;
+    })
+    .finally(() => {
+      dispatch(setGitSyncing({ collectionUid, syncing: false }));
     });
 };
 
