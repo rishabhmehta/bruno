@@ -32,10 +32,20 @@ export const gitSlice = createSlice({
         branch: 'main',
         stagedFiles: [],
         modifiedFiles: [],
+        untrackedFiles: [],
         pendingChanges: 0,
+        ahead: 0,
+        behind: 0,
+        hasRemote: false,
         lastSync: null,
         syncing: false,
         error: null,
+        conflicts: [],
+        conflictDetails: [],
+        mergeInProgress: false,
+        mergeConflictedFiles: [],
+        unresolvedFiles: [],
+        invalidFiles: [],
         autoStage: true
       };
     },
@@ -47,8 +57,16 @@ export const gitSlice = createSlice({
         state.collections[collectionUid].branch = status.branch;
         state.collections[collectionUid].stagedFiles = status.staged || [];
         state.collections[collectionUid].modifiedFiles = status.modified || [];
+        state.collections[collectionUid].untrackedFiles = status.untracked || [];
         state.collections[collectionUid].pendingChanges
           = (status.staged?.length || 0) + (status.modified?.length || 0);
+        state.collections[collectionUid].ahead = status.ahead || 0;
+        state.collections[collectionUid].behind = status.behind || 0;
+        state.collections[collectionUid].hasRemote = Boolean(status.hasRemote);
+        state.collections[collectionUid].mergeInProgress = Boolean(status.mergeInProgress);
+        state.collections[collectionUid].mergeConflictedFiles = status.conflicted || [];
+        state.collections[collectionUid].unresolvedFiles = status.unresolved || [];
+        state.collections[collectionUid].invalidFiles = status.invalid || [];
         state.collections[collectionUid].initialized = true;
       }
     },
@@ -70,10 +88,12 @@ export const gitSlice = createSlice({
     },
 
     setGitError: (state, action) => {
-      const { collectionUid, error } = action.payload;
+      const { collectionUid, error, conflicts, conflictDetails } = action.payload;
 
       if (state.collections[collectionUid]) {
         state.collections[collectionUid].error = error;
+        state.collections[collectionUid].conflicts = conflicts || [];
+        state.collections[collectionUid].conflictDetails = conflictDetails || [];
         state.collections[collectionUid].syncing = false;
       }
     },
@@ -93,6 +113,8 @@ export const gitSlice = createSlice({
         state.collections[collectionUid].lastSync = new Date().toISOString();
         state.collections[collectionUid].syncing = false;
         state.collections[collectionUid].error = null;
+        state.collections[collectionUid].conflicts = [];
+        state.collections[collectionUid].conflictDetails = [];
       }
     },
 
