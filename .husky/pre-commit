@@ -1,4 +1,10 @@
-npx nano-staged
+# A merge commit stages every file upstream changed; lint-fixing them would
+# rewrite upstream code and cause conflicts on the next sync.
+if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+  echo "pre-commit: merge in progress, skipping lint-fix"
+else
+  npx nano-staged
+fi
 
 if git diff --cached --name-only | grep -q '^packages/bruno-sqlite/migrations/'; then
   npm run schema --workspace=packages/bruno-sqlite --silent
