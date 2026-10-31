@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { useDispatch } from 'react-redux';
 import Modal from 'components/Modal';
-import { initializeGitRepo, setRemoteUrl } from 'providers/ReduxStore/slices/git/actions';
-import toast from 'react-hot-toast';
+import { initializeGitRepo } from 'providers/ReduxStore/slices/git/actions';
 import StyledWrapper from './StyledWrapper';
 
 const InitializeRepo = ({ collection, onClose, onSuccess }) => {
@@ -13,15 +12,8 @@ const InitializeRepo = ({ collection, onClose, onSuccess }) => {
   const handleInitialize = () => {
     setInitializing(true);
 
-    dispatch(initializeGitRepo(collection.uid, collection.pathname))
+    dispatch(initializeGitRepo(collection.uid, collection.pathname, remoteUrl.trim()))
       .then(() => {
-        // If remote URL provided, set it
-        if (remoteUrl.trim()) {
-          return dispatch(setRemoteUrl(collection.uid, collection.pathname, 'origin', remoteUrl.trim()));
-        }
-      })
-      .then(() => {
-        toast.success('Git repository initialized successfully!');
         if (onSuccess) {
           onSuccess();
         }

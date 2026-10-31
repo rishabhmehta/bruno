@@ -37,16 +37,7 @@ const GitSync = ({ collection }) => {
   const handleInitialize = () => {
     setInitializing(true);
 
-    dispatch(initializeGitRepo(collection.uid, collection.pathname))
-      .then(() => {
-        // If remote URL provided, set it
-        if (remoteUrl.trim()) {
-          return dispatch(setRemoteUrl(collection.uid, collection.pathname, 'origin', remoteUrl.trim()));
-        }
-      })
-      .then(() => {
-        toast.success('Git repository initialized successfully!');
-      })
+    dispatch(initializeGitRepo(collection.uid, collection.pathname, remoteUrl.trim()))
       .catch((error) => {
         console.error('Failed to initialize git:', error);
       })
