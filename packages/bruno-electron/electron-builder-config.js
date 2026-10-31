@@ -2,8 +2,20 @@ require('dotenv').config({ path: process.env.DOTENV_PATH });
 
 const isBenchmark = process.env.BRUNO_BENCHMARK === 'true';
 
+/*
+ * macOS signing is opt-in and names exactly one certificate, e.g.
+ * APPLE_SIGNING_IDENTITY="Jane Doe (ABCDE12345)". Without it the app is not signed at all:
+ * left undefined, electron-builder would sign with whichever "Developer ID Application"
+ * certificate it finds first in the keychain, which may belong to someone else.
+ */
+const macSigningIdentity = process.env.APPLE_SIGNING_IDENTITY || null;
+
+// A signed .pkg needs a second certificate ("Developer ID Installer"); electron-builder
+// fails without it, so the .pkg target is only built on request.
+const buildMacPkg = process.env.MAC_BUILD_PKG === 'true';
+
 const config = {
-  appId: 'com.usebruno.app',
+  appId: process.env.BRUNO_APP_ID || 'com.usebruno.app',
   productName: isBenchmark ? 'Bruno Benchmark' : 'Bruno',
   extraMetadata: {
     brunoBuild: {
@@ -28,10 +40,7 @@ const config = {
     artifactName: '${name}_${version}_${arch}_${os}.${ext}',
     category: 'public.app-category.developer-tools',
     target: [
-      {
-        target: 'pkg',
-        arch: ['x64', 'arm64']
-      },
+      ...(buildMacPkg ? [{ target: 'pkg', arch: ['x64', 'arm64'] }] : []),
       {
         target: 'dmg',
         arch: ['x64', 'arm64']
@@ -43,11 +52,14 @@ const config = {
     ],
     icon: 'resources/icons/mac/icon.icns',
     hardenedRuntime: true,
-    identity: 'Anoop MD (W7LPPWA48L)',
+    identity: macSigningIdentity,
+    // When signing was asked for, a missing certificate must fail the build instead of
+    // silently producing an unsigned app.
+    forceCodeSigning: Boolean(macSigningIdentity),
     entitlements: 'resources/entitlements.mac.plist',
     entitlementsInherit: 'resources/entitlements.mac.plist',
+    // Notarization runs in notarize.js (afterSign) with the signer's own Apple ID.
     notarize: false,
-    requirements: 'resources/app-requirements.txt',
     protocols: [
       {
         name: 'Bruno',
