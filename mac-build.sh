@@ -1,0 +1,1 @@
+npm run build:bruno-common && npm run build:bruno-requests && npm run build:bruno-filestore && npm run build:bruno-converters && npm run build:bruno-query && npm run build:graphql-docs && npm run build:web && npm run build:electron:mac
