@@ -1,14 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
-import { IconX, IconUpload, IconDownload, IconGitCommit, IconMinus } from '@tabler/icons';
+import { IconUpload, IconDownload, IconGitCommit, IconMinus, IconArrowUp, IconArrowDown } from '@tabler/icons';
 import Modal from 'components/Modal';
 import toast from 'react-hot-toast';
+import ConflictResolver from 'components/GitSync/ConflictResolver';
+import MergeInProgress from 'components/GitSync/MergeInProgress';
 import {
   fetchGitStatus,
+  fetchRemoteChanges,
   commitAndPush,
+  pushToRemote,
   pullFromRemote
 } from 'providers/ReduxStore/slices/git/actions';
 import StyledWrapper from './StyledWrapper';
+
+// Toasts and the error box are handled by the git actions; callers only swallow the rejection.
+const ignoreHandledError = () => {};
 
 const GitPanel = ({ collection, onClose }) => {
   const dispatch = useDispatch();
@@ -17,9 +24,9 @@ const GitPanel = ({ collection, onClose }) => {
   const [commitMessage, setCommitMessage] = useState('');
 
   useEffect(() => {
-    // Fetch latest status when panel opens
     if (collection.pathname) {
       dispatch(fetchGitStatus(collection.uid, collection.pathname));
+      dispatch(fetchRemoteChanges(collection.uid, collection.pathname));
     }
   }, [collection.uid, collection.pathname, dispatch]);
 
@@ -29,26 +36,22 @@ const GitPanel = ({ collection, onClose }) => {
       return;
     }
 
-    const remote = gitState.remote || 'origin';
-    const branch = gitState.branch || 'main';
-
-    dispatch(commitAndPush(collection.uid, collection.pathname, commitMessage, remote, branch))
-      .then(() => {
-        setCommitMessage('');
-      })
+    dispatch(commitAndPush(collection.uid, collection.pathname, commitMessage))
+      .then(() => setCommitMessage(''))
       .catch((error) => {
-        console.error('Commit and push failed:', error);
+        // The commit itself may have succeeded even though the push failed.
+        if (/committed, but not pushed/.test(error.message)) {
+          setCommitMessage('');
+        }
       });
   };
 
   const handlePull = () => {
-    const remote = gitState.remote || 'origin';
-    const branch = gitState.branch || 'main';
+    dispatch(pullFromRemote(collection.uid, collection.pathname)).catch(ignoreHandledError);
+  };
 
-    dispatch(pullFromRemote(collection.uid, collection.pathname, remote, branch))
-      .catch((error) => {
-        console.error('Pull failed:', error);
-      });
+  const handlePush = () => {
+    dispatch(pushToRemote(collection.uid, collection.pathname)).catch(ignoreHandledError);
   };
 
   const handleStageAll = () => {
@@ -56,7 +59,6 @@ const GitPanel = ({ collection, onClose }) => {
       .invoke('renderer:git-stage-all', collection.pathname)
       .then((response) => {
         if (response.success) {
-          toast.success('All changes staged');
           dispatch(fetchGitStatus(collection.uid, collection.pathname));
         } else {
           toast.error(`Failed to stage changes: ${response.error}`);
@@ -72,7 +74,6 @@ const GitPanel = ({ collection, onClose }) => {
       .invoke('renderer:git-unstage-file', collection.pathname, file)
       .then((response) => {
         if (response.success) {
-          toast.success('File unstaged');
           dispatch(fetchGitStatus(collection.uid, collection.pathname));
         } else {
           toast.error(`Failed to unstage file: ${response.error}`);
@@ -87,6 +88,19 @@ const GitPanel = ({ collection, onClose }) => {
     return null;
   }
 
+  const untrackedFiles = new Set(gitState.untrackedFiles || []);
+  const conflicts = gitState.conflicts || [];
+  const conflictDetails = gitState.conflictDetails?.length
+    ? gitState.conflictDetails
+    : conflicts.map((file) => ({ file, hunks: [] }));
+  const hasStagedFiles = gitState.stagedFiles.length > 0;
+  // While behind, a push is always rejected; pulling (and resolving any conflict) comes first.
+  const canPushCommits = gitState.hasRemote
+    && gitState.ahead > 0
+    && gitState.behind === 0
+    && conflicts.length === 0
+    && !hasStagedFiles;
+
   return (
     <Modal size="md" title="Git Sync" handleCancel={onClose} hideFooter={true}>
       <StyledWrapper>
@@ -97,6 +111,18 @@ const GitPanel = ({ collection, onClose }) => {
               <span className="branch-label">Branch:</span>
               <span className="branch-name">{gitState.branch}</span>
             </div>
+            {gitState.hasRemote ? (
+              <div className="sync-summary" data-testid="git-sync-summary">
+                <span title="Commits on the remote that you don't have yet">
+                  <IconArrowDown size={14} /> {gitState.behind} on remote
+                </span>
+                <span title="Your commits that aren't on the remote yet">
+                  <IconArrowUp size={14} /> {gitState.ahead} to push
+                </span>
+              </div>
+            ) : (
+              <div className="last-sync">No remote set. Add one in Collection Settings → Git Sync to push and pull.</div>
+            )}
             {gitState.lastSync && (
               <div className="last-sync">
                 Last synced: {new Date(gitState.lastSync).toLocaleString()}
@@ -104,98 +130,143 @@ const GitPanel = ({ collection, onClose }) => {
             )}
           </div>
 
-          {/* Staged Files */}
-          <div className="files-section">
-            <h3>Staged Changes ({gitState.stagedFiles.length})</h3>
-            {gitState.stagedFiles.length > 0 ? (
-              <ul className="file-list">
-                {gitState.stagedFiles.map((file, index) => (
-                  <li key={index} className="file-item">
-                    <span className="file-status staged">A</span>
-                    <span className="file-path">{file}</span>
-                    <button
-                      className="btn-unstage"
-                      onClick={() => handleUnstageFile(file)}
-                      disabled={gitState.syncing}
-                      title="Unstage this file"
-                    >
-                      <IconMinus size={14} />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="no-changes">No staged changes</p>
-            )}
-          </div>
+          {gitState.mergeInProgress ? (
+            <MergeInProgress
+              collection={collection}
+              conflictedFiles={gitState.mergeConflictedFiles || []}
+              unresolvedFiles={gitState.unresolvedFiles || []}
+              invalidFiles={gitState.invalidFiles || []}
+              syncing={gitState.syncing}
+            />
+          ) : (
+            <>
+              {conflicts.length > 0 && (
+                <ConflictResolver
+                  key={conflicts.join('|')}
+                  collection={collection}
+                  conflictDetails={conflictDetails}
+                  syncing={gitState.syncing}
+                />
+              )}
 
-          {/* Modified Files */}
-          {gitState.modifiedFiles.length > 0 && (
-            <div className="files-section">
-              <div className="files-header">
-                <h3>Modified Files ({gitState.modifiedFiles.length})</h3>
-                <button
-                  className="btn btn-stage-all"
-                  onClick={handleStageAll}
-                  disabled={gitState.syncing}
-                  title="Stage all modified files"
-                >
-                  <IconGitCommit size={16} />
-                  <span>Stage All</span>
-                </button>
+              {/* Staged Files */}
+              <div className="files-section">
+                <h3>Staged Changes ({gitState.stagedFiles.length})</h3>
+                {hasStagedFiles ? (
+                  // divs, not ul/li: this panel renders inside RequestTabs, whose `li` rules style every list item as a tab
+                  <div className="file-list" role="list">
+                    {gitState.stagedFiles.map((file, index) => (
+                      <div key={index} className="file-item" role="listitem">
+                        <span className="file-status staged">S</span>
+                        <span className="file-path">{file}</span>
+                        <button
+                          className="btn-unstage"
+                          onClick={() => handleUnstageFile(file)}
+                          disabled={gitState.syncing}
+                          title="Unstage this file"
+                        >
+                          <IconMinus size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="no-changes">No staged changes</p>
+                )}
               </div>
-              <ul className="file-list">
-                {gitState.modifiedFiles.map((file, index) => (
-                  <li key={index} className="file-item">
-                    <span className="file-status modified">M</span>
-                    <span className="file-path">{file}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+
+              {/* Modified Files */}
+              {gitState.modifiedFiles.length > 0 && (
+                <div className="files-section">
+                  <div className="files-header">
+                    <h3>Changed Files ({gitState.modifiedFiles.length})</h3>
+                    <button
+                      className="btn btn-stage-all"
+                      onClick={handleStageAll}
+                      disabled={gitState.syncing}
+                      title="Stage all changed files"
+                    >
+                      <IconGitCommit size={16} />
+                      <span>Stage All</span>
+                    </button>
+                  </div>
+                  <div className="file-list" role="list">
+                    {gitState.modifiedFiles.map((file, index) => {
+                      const isNew = untrackedFiles.has(file);
+                      return (
+                        <div key={index} className="file-item" role="listitem">
+                          <span
+                            className={`file-status ${isNew ? 'untracked' : 'modified'}`}
+                            title={isNew ? 'New file' : 'Modified'}
+                          >
+                            {isNew ? 'U' : 'M'}
+                          </span>
+                          <span className="file-path">{file}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Commit Message */}
+              {gitState.pendingChanges > 0 && (
+                <div className="commit-section">
+                  <label htmlFor="commit-message">Commit Message</label>
+                  <textarea
+                    id="commit-message"
+                    className="commit-input"
+                    placeholder="Enter commit message..."
+                    value={commitMessage}
+                    onChange={(e) => setCommitMessage(e.target.value)}
+                    rows={3}
+                    disabled={gitState.syncing}
+                  />
+                  {!hasStagedFiles && <p className="hint">Stage the files you want to commit first.</p>}
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="actions">
+                <button
+                  className="btn btn-pull"
+                  onClick={handlePull}
+                  disabled={gitState.syncing || !gitState.hasRemote}
+                  data-testid="git-pull"
+                >
+                  <IconDownload size={16} />
+                  <span>{gitState.behind > 0 ? `Pull (${gitState.behind})` : 'Pull'}</span>
+                </button>
+
+                {canPushCommits && (
+                  <button
+                    className="btn btn-commit-push"
+                    onClick={handlePush}
+                    disabled={gitState.syncing}
+                    data-testid="git-push"
+                  >
+                    <IconUpload size={16} />
+                    <span>{gitState.syncing ? 'Syncing...' : `Push (${gitState.ahead})`}</span>
+                  </button>
+                )}
+
+                {gitState.pendingChanges > 0 && (
+                  <button
+                    className="btn btn-commit-push"
+                    onClick={handleCommitAndPush}
+                    disabled={gitState.syncing || !hasStagedFiles || !commitMessage.trim()}
+                    data-testid="git-commit-push"
+                  >
+                    <IconUpload size={16} />
+                    <span>{gitState.syncing ? 'Syncing...' : 'Commit & Push'}</span>
+                  </button>
+                )}
+              </div>
+            </>
           )}
-
-          {/* Commit Message */}
-          {gitState.pendingChanges > 0 && (
-            <div className="commit-section">
-              <label htmlFor="commit-message">Commit Message</label>
-              <textarea
-                id="commit-message"
-                className="commit-input"
-                placeholder="Enter commit message..."
-                value={commitMessage}
-                onChange={(e) => setCommitMessage(e.target.value)}
-                rows={3}
-                disabled={gitState.syncing}
-              />
-            </div>
-          )}
-
-          {/* Actions */}
-          <div className="actions">
-            <button
-              className="btn btn-pull"
-              onClick={handlePull}
-              disabled={gitState.syncing}
-            >
-              <IconDownload size={16} />
-              <span>Pull</span>
-            </button>
-
-            {gitState.pendingChanges > 0 && (
-              <button
-                className="btn btn-commit-push"
-                onClick={handleCommitAndPush}
-                disabled={gitState.syncing || !commitMessage.trim()}
-              >
-                <IconUpload size={16} />
-                <span>{gitState.syncing ? 'Syncing...' : 'Commit & Push'}</span>
-              </button>
-            )}
-          </div>
 
           {/* Error Display */}
-          {gitState.error && (
+          {gitState.error && conflicts.length === 0 && (
             <div className="error-message">
               <strong>Error:</strong>
               <pre>{gitState.error}</pre>

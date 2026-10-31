@@ -36,6 +36,26 @@ const StyledWrapper = styled.div`
     color: ${(props) => props.theme.colors.text.muted};
   }
 
+  .sync-summary {
+    display: flex;
+    gap: 1rem;
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+    color: ${(props) => props.theme.colors.text.muted};
+
+    span {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+  }
+
+  .hint {
+    margin-top: 0.4rem;
+    font-size: 0.8rem;
+    color: ${(props) => props.theme.colors.text.muted};
+  }
+
   .files-section {
     margin-bottom: 1.5rem;
 
@@ -97,6 +117,11 @@ const StyledWrapper = styled.div`
 
     &.modified {
       background: #f59e0b;
+      color: white;
+    }
+
+    &.untracked {
+      background: #3b82f6;
       color: white;
     }
   }
@@ -242,10 +267,10 @@ const StyledWrapper = styled.div`
 
   .error-message {
     padding: 1rem;
-    background: #fef2f2;
-    border: 1px solid #fecaca;
+    background: ${(props) => props.theme.status.danger.background};
+    border: 1px solid ${(props) => props.theme.status.danger.border};
     border-radius: 4px;
-    color: #dc2626;
+    color: ${(props) => props.theme.status.danger.text};
     font-size: 0.85rem;
     margin-top: 1rem;
 
@@ -264,28 +289,6 @@ const StyledWrapper = styled.div`
     }
   }
 
-  .warning-message {
-    padding: 1rem;
-    background: #fffbeb;
-    border: 1px solid #fcd34d;
-    border-radius: 4px;
-    color: #b45309;
-    font-size: 0.85rem;
-    margin-top: 1rem;
-
-    strong {
-      font-weight: 600;
-    }
-
-    ul {
-      margin: 0.5rem 0 0 1.5rem;
-      padding: 0;
-    }
-
-    li {
-      margin: 0.25rem 0;
-    }
-  }
 `;
 
 export default StyledWrapper;
