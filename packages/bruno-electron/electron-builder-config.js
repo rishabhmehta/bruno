@@ -15,7 +15,9 @@ const macSigningIdentity = process.env.APPLE_SIGNING_IDENTITY || null;
 const buildMacPkg = process.env.MAC_BUILD_PKG === 'true';
 
 const config = {
-  appId: process.env.BRUNO_APP_ID || 'com.usebruno.app',
+  // This fork's own ID (official Bruno is com.usebruno.app), so macOS and Windows never
+  // treat the two as the same app.
+  appId: process.env.BRUNO_APP_ID || 'in.techpix.bruno',
   productName: isBenchmark ? 'Bruno Benchmark' : 'Bruno',
   extraMetadata: {
     brunoBuild: {

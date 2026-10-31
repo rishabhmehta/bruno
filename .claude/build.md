@@ -16,11 +16,11 @@ anyone.
 2. **Only the certificate you name is used.** The build never picks a certificate
    from the keychain by itself. A Mac can hold several (for example a client's), and
    it would otherwise take the first one it finds.
-3. **The bundle ID is still Bruno's** (`com.usebruno.app`) unless you set
-   `BRUNO_APP_ID`. If people might also have the official Bruno installed, set your
-   own (e.g. `com.yourname.bruno`). Otherwise macOS treats the two as the same app:
-   same name in Applications, same `bruno://` links. Decide this **before** the first
-   release. Changing it later makes macOS see a different app.
+3. **The app's bundle ID is `in.techpix.bruno`**, this fork's own, not official Bruno's
+   `com.usebruno.app`. It's the default in the config and in `.env.sample`
+   (`BRUNO_APP_ID`). **Keep it the same for every release.** macOS and Windows treat a
+   different ID as a different app, so changing it later means people end up with two
+   copies instead of an update.
 4. **The Apple certificate does nothing for Windows.** See the Windows section.
 
 ---
@@ -83,7 +83,7 @@ APPLE_APP_SPECIFIC_PASSWORD = abcd-efgh-ijkl-mnop
 APPLE_TEAM_ID = ABCDE12345
 SKIP_NOTARIZE = false
 MAC_BUILD_PKG = false
-BRUNO_APP_ID =
+BRUNO_APP_ID = in.techpix.bruno
 ```
 
 `APPLE_SIGNING_IDENTITY` is the text from step 2 **without** the
@@ -194,4 +194,4 @@ Linux packages aren't code-signed in the same way, so nothing extra is needed.
 | Sign but skip notarization (local check) | Identity set, `SKIP_NOTARIZE = true` |
 | Build something to send to people | Identity + Apple ID + app password + Team ID set, then verify with `spctl` |
 | Also get a `.pkg` | `MAC_BUILD_PKG = true` and a Developer ID Installer certificate |
-| Keep it apart from official Bruno | `BRUNO_APP_ID = com.yourname.bruno` (decide before first release) |
+| Change the app's bundle ID | `BRUNO_APP_ID` (default `in.techpix.bruno`). Avoid this after the first release. |
