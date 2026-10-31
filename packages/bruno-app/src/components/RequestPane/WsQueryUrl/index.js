@@ -1,78 +1,95 @@
-import { IconArrowRight, IconDeviceFloppy, IconPlugConnected, IconPlugConnectedX } from '@tabler/icons';
-import { IconWebSocket } from 'components/Icons/Grpc';
+import { IconDeviceFloppy, IconPlugConnected, IconPlugConnectedX } from '@tabler/icons';
+import SendButton from 'components/RequestPane/SendButton';
 import classnames from 'classnames';
 import SingleLineEditor from 'components/SingleLineEditor/index';
 import { requestUrlChanged } from 'providers/ReduxStore/slices/collections';
 import { wsConnectOnly, saveRequest } from 'providers/ReduxStore/slices/collections/actions';
 import { useTheme } from 'providers/Theme';
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { useDispatch } from 'react-redux';
-import { getPropertyFromDraftOrRequest } from 'utils/collections';
 import { isMacOS } from 'utils/common/platform';
-import { hasRequestChanges } from 'utils/collections';
-import { closeWsConnection, isWsConnectionActive } from 'utils/network/index';
+import { hasRequestChanges, getAllVariables } from 'utils/collections';
+import { closeWsConnection, getWsConnectionStatus } from 'utils/network/index';
 import StyledWrapper from './StyledWrapper';
+import ToolHint from 'components/ToolHint';
+import { interpolateUrl } from 'utils/url';
+import useDebounce from 'hooks/useDebounce';
 import get from 'lodash/get';
+
+const CONNECTION_STATUS = {
+  CONNECTING: 'connecting',
+  CONNECTED: 'connected',
+  DISCONNECTING: 'disconnecting',
+  DISCONNECTED: 'disconnected'
+};
+
+const UNINTERACTIVE_STATES = [CONNECTION_STATUS.CONNECTING, CONNECTION_STATUS.DISCONNECTING];
+
+const useWsConnectionStatus = (requestId) => {
+  const [connectionStatus, setConnectionStatus] = useState(CONNECTION_STATUS.DISCONNECTED);
+  useEffect(() => {
+    const checkConnectionStatus = async () => {
+      const result = await getWsConnectionStatus(requestId);
+      setConnectionStatus(result?.status ?? CONNECTION_STATUS.DISCONNECTED);
+    };
+    checkConnectionStatus();
+    const interval = setInterval(checkConnectionStatus, 2000);
+    return () => clearInterval(interval);
+  }, [requestId]);
+  return [connectionStatus, setConnectionStatus];
+};
 
 const WsQueryUrl = ({ item, collection, handleRun }) => {
   const dispatch = useDispatch();
   const { theme, displayedTheme } = useTheme();
-  const [isConnectionActive, setIsConnectionActive] = useState(false);
   // TODO: reaper, better state for connecting
-  const [isConnecting, setIsConnecting] = useState(false);
-  const url = getPropertyFromDraftOrRequest(item, 'request.url');
-  const response = item.draft ? get(item, 'draft.response', {}) : get(item, 'response', {});
   const saveShortcut = isMacOS() ? '⌘S' : 'Ctrl+S';
   const hasChanges = useMemo(() => hasRequestChanges(item), [item]);
 
-  const showConnectingPulse = isConnecting && response.status !== 'CLOSED';
+  const [connectionStatus, setConnectionStatus] = useWsConnectionStatus(item.uid);
+  const url = item.draft ? get(item, 'draft.request.url', '') : get(item, 'request.url', '');
 
-  // Check connection status
-  useEffect(() => {
-    const checkConnectionStatus = async () => {
-      try {
-        const result = await isWsConnectionActive(item.uid);
-        const active = Boolean(result.isActive);
-        setIsConnectionActive(active);
-        setIsConnecting(false);
-      } catch (error) {
-        setIsConnectionActive(false);
-        setIsConnecting(false);
+  const allVariables = useMemo(() => {
+    return getAllVariables(collection, item);
+  }, [collection, item]);
+
+  const interpolatedURL = useMemo(() => {
+    if (!url) return '';
+    return interpolateUrl({ url, variables: allVariables }) || '';
+  }, [url, allVariables]);
+
+  // Debounce interpolated URL to avoid excessive reconnections
+  const debouncedInterpolatedURL = useDebounce(interpolatedURL, 400);
+  const previousDeboundedInterpolatedURL = useRef(debouncedInterpolatedURL);
+
+  const handleConnect = async () => {
+    setConnectionStatus(CONNECTION_STATUS.CONNECTING);
+    dispatch(wsConnectOnly(item, collection.uid));
+    previousDeboundedInterpolatedURL.current = debouncedInterpolatedURL;
+  };
+
+  const handleDisconnect = async (e, notify) => {
+    e && e.stopPropagation();
+    setConnectionStatus(CONNECTION_STATUS.DISCONNECTING);
+    try {
+      const result = await closeWsConnection(item.uid);
+      if (!result?.success) {
+        throw new Error(result?.error || 'Failed to close WebSocket connection');
       }
-    };
-
-    checkConnectionStatus();
-    const interval = setInterval(checkConnectionStatus, 2000);
-    return () => clearInterval(interval);
-  }, [item.uid]);
-
-  const onUrlChange = (value) => {
-    closeWsConnection(item.uid);
-    dispatch(requestUrlChanged({
-      url: value,
-      itemUid: item.uid,
-      collectionUid: collection.uid
-    }));
+      notify && toast.success('WebSocket connection closed');
+      setConnectionStatus(CONNECTION_STATUS.DISCONNECTED);
+    } catch (err) {
+      console.error('Failed to close WebSocket connection:', err);
+      notify && toast.error('Failed to close WebSocket connection');
+      const statusResult = await getWsConnectionStatus(item.uid);
+      setConnectionStatus(statusResult?.status ?? CONNECTION_STATUS.DISCONNECTED);
+    }
   };
 
-  const handleCloseConnection = (e) => {
-    e.stopPropagation();
-
-    closeWsConnection(item.uid)
-      .then(() => {
-        toast.success('WebSocket connection closed');
-        setIsConnectionActive(false);
-        setIsConnecting(false);
-      })
-      .catch((err) => {
-        console.error('Failed to close WebSocket connection:', err);
-        toast.error('Failed to close WebSocket connection');
-      });
-  };
-
-  const handleRunClick = async (e) => {
-    e.stopPropagation();
+  const handleWsRun = (e) => {
+    e?.stopPropagation();
+    if (UNINTERACTIVE_STATES.includes(connectionStatus)) return;
     if (!url) {
       toast.error('Please enter a valid WebSocket URL');
       return;
@@ -80,91 +97,110 @@ const WsQueryUrl = ({ item, collection, handleRun }) => {
     handleRun(e);
   };
 
-  const handleConnect = (e) => {
-    setIsConnecting(true);
-    dispatch(wsConnectOnly(item, collection.uid));
-  };
-
   const onSave = (finalValue) => {
     dispatch(saveRequest(item.uid, collection.uid));
   };
 
+  const handleUrlChange = (value) => {
+    const finalUrl = value?.trim() ?? value;
+    console.log('finalUrl: ', finalUrl);
+    dispatch(requestUrlChanged({
+      itemUid: item.uid,
+      collectionUid: collection.uid,
+      url: finalUrl
+    }));
+  };
+
+  // Detect interpolated URL changes and attempt a disconnect
+  useEffect(() => {
+    if (connectionStatus !== CONNECTION_STATUS.CONNECTED) return;
+    if (previousDeboundedInterpolatedURL.current === debouncedInterpolatedURL) return;
+    if (debouncedInterpolatedURL === '') return;
+    setConnectionStatus(CONNECTION_STATUS.DISCONNECTING);
+    closeWsConnection(item.uid).then(() => {}).catch(() => {});
+  }, [debouncedInterpolatedURL, connectionStatus, item]);
+
   return (
     <StyledWrapper>
       <div className="flex items-center h-full">
-        <div className="flex items-center input-container flex-1 w-full input-container pr-2 h-full relative">
-          <div className="flex items-center justify-center w-16">
-            <span className="text-xs font-bold method-ws">WS</span>
+        <div className="flex items-center input-container flex-1 min-w-0 h-full relative">
+          <div className="flex items-center justify-center px-[10px]">
+            <span className="text-xs font-medium method-ws">WS</span>
           </div>
           <SingleLineEditor
             value={url}
             onSave={(finalValue) => onSave(finalValue)}
-            onChange={onUrlChange}
+            onChange={handleUrlChange}
             placeholder="ws://localhost:8080 or wss://example.com"
             className="w-full"
             theme={displayedTheme}
-            onRun={handleRun}
+            onRun={handleWsRun}
+            collection={collection}
+            item={item}
           />
-          <div className="flex items-center h-full mr-2 cursor-pointer">
-            <div
-              className="infotip mr-3"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (!hasChanges) return;
-                onSave();
-              }}
-            >
-              <IconDeviceFloppy
-                color={hasChanges ? theme.colors.text.yellow : theme.requestTabs.icon.color}
-                strokeWidth={1.5}
-                size={22}
-                className={`${hasChanges ? 'cursor-pointer' : 'cursor-default'}`}
-              />
-              <span className="infotip-text text-xs">
-                Save <span className="shortcut">({saveShortcut})</span>
-              </span>
-            </div>
+          <div className="flex items-center h-full cursor-pointer gap-3 mx-3">
+            <ToolHint text={`Save (${saveShortcut})`} toolhintId="ws-save-request" place="top" positionStrategy="fixed">
+              <div
+                className="flex items-center"
+                data-testid="save-request-button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!hasChanges) return;
+                  onSave();
+                }}
+              >
+                <IconDeviceFloppy
+                  color={hasChanges ? theme.draftColor : theme.requestTabs.icon.color}
+                  strokeWidth={1.5}
+                  size={20}
+                  className={`${hasChanges ? 'cursor-pointer' : 'cursor-default'}`}
+                />
+              </div>
+            </ToolHint>
 
-            {isConnectionActive && (
-              <div className="connection-controls relative flex items-center h-full gap-3 mr-3">
-                <div className="infotip" onClick={handleCloseConnection}>
-                  <IconPlugConnectedX
-                    color={theme.colors.text.danger}
-                    strokeWidth={1.5}
-                    size={22}
-                    className="cursor-pointer"
-                  />
-                  <span className="infotip-text text-xs">Close Connection</span>
-                </div>
+            {(connectionStatus === CONNECTION_STATUS.CONNECTED || connectionStatus === CONNECTION_STATUS.DISCONNECTING) && (
+              <div className="connection-controls relative flex items-center h-full">
+                <ToolHint text={connectionStatus === CONNECTION_STATUS.DISCONNECTING ? 'Disconnecting...' : 'Close Connection'} toolhintId="ws-close-connection" place="top" positionStrategy="fixed">
+                  <div className="flex items-center" onClick={(e) => connectionStatus === CONNECTION_STATUS.CONNECTED ? handleDisconnect(e, true) : null} data-testid="ws-disconnect-button">
+                    <IconPlugConnectedX
+                      color={theme.colors.text.danger}
+                      strokeWidth={1.5}
+                      size={20}
+                      className={classnames('cursor-pointer', {
+                        'animate-blink': connectionStatus === CONNECTION_STATUS.DISCONNECTING
+                      })}
+                    />
+                  </div>
+                </ToolHint>
               </div>
             )}
 
-            {!isConnectionActive && (
-              <div className="connection-controls relative flex items-center h-full gap-3 mr-3">
-                <div className="infotip" onClick={handleConnect}>
-                  <IconPlugConnected
-                    className={
-                      classnames('cursor-pointer', {
-                        'animate-pulse': showConnectingPulse
-                      })
-                    }
-                    color={theme.colors.text.green}
-                    strokeWidth={1.5}
-                    size={22}
-                  />
-                  <span className="infotip-text text-xs">Connect</span>
-                </div>
+            {(connectionStatus === CONNECTION_STATUS.CONNECTING || connectionStatus === CONNECTION_STATUS.DISCONNECTED) && (
+              <div className="connection-controls relative flex items-center h-full">
+                <ToolHint text="Connect" toolhintId="ws-connect" place="top" positionStrategy="fixed">
+                  <div className="flex items-center" onClick={handleConnect} data-testid="ws-connect-button">
+                    <IconPlugConnected
+                      className={classnames('cursor-pointer', {
+                        'animate-pulse': connectionStatus === CONNECTION_STATUS.CONNECTING
+                      })}
+                      color={theme.colors.text.green}
+                      strokeWidth={1.5}
+                      size={20}
+                    />
+                  </div>
+                </ToolHint>
               </div>
             )}
-
-            <div data-testid="run-button" className="cursor-pointer" onClick={handleRunClick}>
-              <IconArrowRight color={theme.requestTabPanel.url.icon} strokeWidth={1.5} size={22} />
-            </div>
           </div>
+          {connectionStatus === CONNECTION_STATUS.CONNECTED && <div className="connection-status-strip" data-testid="ws-connected-strip"></div>}
+          {connectionStatus === CONNECTION_STATUS.DISCONNECTING && <div className="connection-status-strip disconnecting" data-testid="ws-disconnecting-strip"></div>}
         </div>
+        <SendButton
+          onSend={handleWsRun}
+          disabled={UNINTERACTIVE_STATES.includes(connectionStatus)}
+          testId="run-button"
+        />
       </div>
-
-      {isConnectionActive && <div className="connection-status-strip"></div>}
     </StyledWrapper>
   );
 };

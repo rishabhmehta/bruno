@@ -1,85 +1,147 @@
-import { buildHarRequest } from 'utils/codegenerator/har';
-import { getAuthHeaders } from 'utils/codegenerator/auth';
-import { getAllVariables, getTreePathFromCollectionToItem } from 'utils/collections/index';
-import { interpolateHeaders, interpolateBody } from './interpolation';
+import { buildHar } from '@usebruno/common';
+import { stripOrigin } from '@usebruno/common/utils';
+import { getAllVariables, getTreePathFromCollectionToItem, mergeHeaders } from 'utils/collections/index';
+import { resolveInheritedAuth } from 'utils/auth';
+import { get } from 'lodash';
+import { interpolateUrl, interpolateUrlPathParams, prependDefaultScheme } from 'utils/url/index';
+import { parse } from 'url';
+import { stringify } from 'query-string';
 
-// Merge headers from collection, folders, and request
-const mergeHeaders = (collection, request, requestTreePath) => {
-  let headers = new Map();
-
-  // Add collection headers first
-  const collectionHeaders = collection?.root?.request?.headers || [];
-  collectionHeaders.forEach((header) => {
-    if (header.enabled) {
-      headers.set(header.name, header);
+// Folds any `cookie`/`Cookie` header into a single header.
+const mergeCookieHeaders = (headers, capitalizeCookieHeaderName) => {
+  let cookieHeaderIndex = -1;
+  const merged = [];
+  for (const header of headers) {
+    if (header.name.toLowerCase() !== 'cookie') {
+      merged.push(header);
+      continue;
     }
-  });
+    if (cookieHeaderIndex === -1) {
+      cookieHeaderIndex = merged.length;
+      merged.push({ ...header, name: capitalizeCookieHeaderName ? 'Cookie' : header.name });
+    } else {
+      merged[cookieHeaderIndex].value += `; ${header.value}`;
+    }
+  }
+  return merged;
+};
 
-  // Add folder headers next, traversing from root to leaf
-  if (requestTreePath && requestTreePath.length > 0) {
-    for (let i of requestTreePath) {
-      if (i.type === 'folder') {
-        const folderHeaders = i?.root?.request?.headers || [];
-        folderHeaders.forEach((header) => {
-          if (header.enabled) {
-            headers.set(header.name, header);
-          }
-        });
-      }
+// curl --digest / --ntlm are surface-level snippet adjustments, not part of
+// the HAR contract — keep them at this layer.
+const addCurlAuthFlags = (curlCommand, auth) => {
+  if (!auth || !curlCommand) return curlCommand;
+
+  const authMode = auth.mode;
+
+  if (authMode === 'digest' || authMode === 'ntlm') {
+    const username = get(auth, `${authMode}.username`, '');
+    const password = get(auth, `${authMode}.password`, '');
+    const credentials = password ? `${username}:${password}` : username;
+    const authFlag = authMode === 'digest' ? '--digest' : '--ntlm';
+    const escapedCredentials = credentials.replace(/'/g, `'\\''`);
+
+    const curlMatch = curlCommand.match(/^(curl(?:\.exe)?)/i);
+    if (curlMatch) {
+      const curlCmd = curlMatch[1];
+      const restOfCommand = curlCommand.slice(curlCmd.length);
+      return `${curlCmd} ${authFlag} --user '${escapedCredentials}'${restOfCommand}`;
     }
   }
 
-  // Add request headers last (they take precedence)
-  const requestHeaders = request.headers || [];
-  requestHeaders.forEach((header) => {
-    if (header.enabled) {
-      headers.set(header.name, header);
-    }
-  });
-
-  // Convert Map back to array
-  return Array.from(headers.values());
+  return curlCommand;
 };
 
-const generateSnippet = ({ language, item, collection, shouldInterpolate = false }) => {
+const generateSnippet = async ({ language, item, collection, shouldInterpolate = false }) => {
   try {
     // Get HTTPSnippet dynamically so mocks can be applied in tests
     const { HTTPSnippet } = require('httpsnippet');
 
     const variables = getAllVariables(collection, item);
-
     const request = item.request;
 
-    // Get the request tree path and merge headers
-    const requestTreePath = getTreePathFromCollectionToItem(collection, item);
-    let headers = mergeHeaders(collection, request, requestTreePath);
-
-    // Add auth headers if needed
-    if (request.auth && request.auth.mode !== 'none') {
-      const collectionAuth = collection?.root?.request?.auth || null;
-      const authHeaders = getAuthHeaders(collectionAuth, request.auth);
-      headers = [...headers, ...authHeaders];
+    let effectiveAuth = request.auth;
+    if (request.auth?.mode === 'inherit') {
+      const resolvedRequest = resolveInheritedAuth(item, collection);
+      effectiveAuth = resolvedRequest.auth;
     }
 
-    // Interpolate headers and body if needed
-    if (shouldInterpolate) {
-      headers = interpolateHeaders(headers, variables);
-      if (request.body) {
-        request.body = interpolateBody(request.body, variables);
+    const requestTreePath = getTreePathFromCollectionToItem(collection, item);
+    const mergedHeaders = mergeHeaders(collection, request, requestTreePath);
+
+    const settings = item.draft ? get(item, 'draft.settings') : get(item, 'settings');
+
+    // buildHar intentionally does NOT resolve `{{var}}` / `:pathParam` in the URL
+    const sourceUrl = shouldInterpolate
+      ? interpolateUrlPathParams(
+          interpolateUrl({ url: request.url, variables }) || '',
+          request.params,
+          variables,
+          { raw: true }
+        )
+      : prependDefaultScheme(request.url);
+
+    const { har, rawUrl, encodedUrl, unhash } = await buildHar({
+      request: {
+        method: request.method,
+        url: sourceUrl,
+        params: request.params,
+        pathParams: [],
+        headers: mergedHeaders,
+        body: request.body,
+        auth: effectiveAuth,
+        settings
+      },
+      variables,
+      shouldInterpolate,
+      oauth2Credentials: collection?.oauth2Credentials,
+      collectionUid: collection?.uid
+    });
+
+    const isCurl = language.target === 'shell' && language.client === 'curl';
+    const isLibcurl = language.target === 'c' && language.client === 'libcurl';
+
+    // Generate snippet using HTTPSnippet
+    const snippet = new HTTPSnippet({ ...har, headers: mergeCookieHeaders(har.headers, isCurl || isLibcurl) });
+    let result = snippet.convert(language.target, language.client);
+
+    // curl --digest / --ntlm flags. Snippet-text manipulation, not HAR.
+    if (isCurl) {
+      result = addCurlAuthFlags(result, effectiveAuth);
+    }
+    /**
+     *
+     * Display-swap. HTTPSnippet renders the URL in encoded form (using har.queryString as the source of truth).
+     * For OFF mode we want the user's raw bytes visible in the snippet — swap the encoded path+query substring for the raw form.
+     * buildHar derives `rawUrl` from the exact URL passed in above, so it carries the user's
+     * pre-encoded bytes (and, when the toggle is OFF, the un-substituted placeholders).
+     * `item.rawUrl` remains honoured for callers that resolve the URL themselves and want
+     * their own bytes displayed; GenerateCodeItem no longer sets it.
+     */
+    const displayRawUrl = item.rawUrl || rawUrl;
+    const parsed = parse(encodedUrl, true, true);
+    const search = stringify(parsed.query, { sort: false });
+    const httpSnippetPath = search ? `${parsed.pathname}?${search}` : parsed.pathname;
+
+    let desiredPath;
+    if (settings?.encodeUrl === true) {
+      // Apply the same encodeUrl() transform used by the actual request execution path
+      // so the snippet matches what's sent on the wire.
+      desiredPath = stripOrigin(encodedUrl);
+    } else {
+      desiredPath = stripOrigin(displayRawUrl);
+      // HTTP raw target uses spaces as delimiters in the request line
+      // (RFC 7230 §3.1.1), so a literal space would terminate the URI early.
+      if (language.target === 'http') {
+        desiredPath = desiredPath.replace(/ /g, '%20');
       }
     }
 
-    // Build HAR request
-    const harRequest = buildHarRequest({
-      request,
-      headers
-    });
+    if (httpSnippetPath !== desiredPath && httpSnippetPath?.length > 1) {
+      result = result.replaceAll(httpSnippetPath, desiredPath);
+    }
 
-    // Generate snippet using HTTPSnippet
-    const snippet = new HTTPSnippet(harRequest);
-    const result = snippet.convert(language.target, language.client);
-
-    return result;
+    // Restore `{{var}}` placeholders that buildHar hashed during processing.
+    return unhash(result);
   } catch (error) {
     console.error('Error generating code snippet:', error);
     return 'Error generating code snippet';
@@ -87,6 +149,5 @@ const generateSnippet = ({ language, item, collection, shouldInterpolate = false
 };
 
 export {
-  generateSnippet,
-  mergeHeaders
+  generateSnippet
 };

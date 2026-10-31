@@ -1,6 +1,8 @@
 const { customAlphabet } = require('nanoid');
 const iconv = require('iconv-lite');
 const { cloneDeep } = require('lodash');
+const { formatMultipartData } = require('./form-data');
+const { isFormData } = require('@usebruno/common').utils;
 
 // a customized version of nanoid without using _ and -
 const uuid = () => {
@@ -30,8 +32,8 @@ const parseJson = async (obj) => {
 const getCircularReplacer = () => {
   const seen = new WeakSet();
   return (key, value) => {
-    if (typeof value === "object" && value !== null) {
-      if (seen.has(value)) return "[Circular]";
+    if (typeof value === 'object' && value !== null) {
+      if (seen.has(value)) return '[Circular]';
       seen.add(value);
     }
     return value;
@@ -74,7 +76,7 @@ const generateUidBasedOnHash = (str) => {
 };
 
 const flattenDataForDotNotation = (data) => {
-  var result = {};
+  let result = {};
   function recurse(current, prop) {
     if (Object(current) !== current) {
       result[prop] = current;
@@ -86,8 +88,8 @@ const flattenDataForDotNotation = (data) => {
         result[prop] = [];
       }
     } else {
-      var isEmpty = true;
-      for (var p in current) {
+      let isEmpty = true;
+      for (let p in current) {
         isEmpty = false;
         recurse(current[p], prop ? prop + '.' + p : p);
       }
@@ -128,7 +130,18 @@ const parseDataFromResponse = (response, disableParsingResponseJson = false) => 
 };
 
 const parseDataFromRequest = (request) => {
-  const requestDataString = request.mode == 'file'? "<request body redacted>": (typeof request?.data === 'string' ? request?.data : safeStringifyJSON(request?.data));
+  let requestDataString;
+
+  // File uploads are redacted, multipart FormData is formatted from original data for readability, and other types are stringified as-is.
+  if (request.mode === 'file') {
+    requestDataString = '<request body redacted>';
+  } else if (isFormData(request?.data) && Array.isArray(request._originalMultipartData)) {
+    const boundary = request.data._boundary || 'boundary';
+    requestDataString = formatMultipartData(request._originalMultipartData, boundary);
+  } else {
+    requestDataString = typeof request?.data === 'string' ? request?.data : safeStringifyJSON(request?.data);
+  }
+
   const requestCopy = cloneDeep(request);
   if (!requestCopy.data) {
     return { data: null, dataBuffer: null };
@@ -136,6 +149,17 @@ const parseDataFromRequest = (request) => {
   requestCopy.data = requestDataString;
   return parseDataFromResponse(requestCopy);
 };
+
+// Read a param from the query string, falling back to the URL hash fragment
+// (implicit flow returns values in the hash rather than query params).
+const getParamFromUrl = (urlObj, param) => {
+  return (
+    urlObj.searchParams.get(param)
+    || (urlObj.hash ? new URLSearchParams(urlObj.hash.substring(1)).get(param) : null)
+  );
+};
+
+const isBinaryRequestBody = (data) => Buffer.isBuffer(data) || typeof data?.pipe === 'function';
 
 module.exports = {
   uuid,
@@ -147,5 +171,7 @@ module.exports = {
   generateUidBasedOnHash,
   flattenDataForDotNotation,
   parseDataFromResponse,
-  parseDataFromRequest
+  parseDataFromRequest,
+  getParamFromUrl,
+  isBinaryRequestBody
 };

@@ -122,6 +122,14 @@ describe('Examples functionality', () => {
 
       expect(output).toEqual(expected);
     });
+
+    it('should parse swapped status/statusText from pre-fix Postman imports', () => {
+      const input = fs.readFileSync(path.join(__dirname, 'fixtures', 'bru', 'bruToJson-swapped-status.bru'), 'utf8');
+      const expected = require('./fixtures/json/bruToJson-swapped-status.json');
+      const output = bruToJson(input);
+
+      expect(output).toEqual(expected);
+    });
   });
 
   describe('jsonToBru conversion', () => {
@@ -243,6 +251,99 @@ example {
 
       expect(output).toEqual(expected);
     });
+
+    it('should handle examples without description', () => {
+      const jsonInput = {
+        meta: {
+          name: 'Test API',
+          type: 'http'
+        },
+        http: {
+          url: 'https://api.example.com/test',
+          method: 'get'
+        },
+        examples: [
+          {
+            name: 'Example Request',
+            request: {
+              url: 'https://api.example.com/example',
+              method: 'get'
+            }
+          }
+        ]
+      };
+
+      const expected = `meta {
+  name: Test API
+  type: http
+}
+
+get {
+  url: https://api.example.com/test
+}
+
+example {
+  name: Example Request
+  
+  request: {
+    url: https://api.example.com/example
+    method: get
+  }
+}
+`;
+
+      const output = jsonToBru(jsonInput);
+
+      expect(output).toEqual(expected);
+    });
+  });
+
+  describe('Examples with binary bodies', () => {
+    it('should round-trip a binary (base64) example body byte-for-byte', () => {
+      // Real binary bytes (not valid UTF-8) covering the full 0-255 range,
+      // so the base64 string exercises '+', '/' and '=' padding.
+      const originalBytes = Buffer.from(Array.from({ length: 256 }, (_, i) => i)); // [0, 1, 2, 3, 4, 5, 6, 7, ..., 253, 254, 255] -> 00 01 02 03 04 05 06 07 ... FD FE FF
+      const base64Content = originalBytes.toString('base64');
+
+      const jsonInput = {
+        meta: {
+          name: 'Binary Example API',
+          type: 'http',
+          seq: 1
+        },
+        http: {
+          method: 'get',
+          url: 'https://api.example.com/image'
+        },
+        examples: [
+          {
+            name: 'PNG Response',
+            request: {
+              url: 'https://api.example.com/image',
+              method: 'get'
+            },
+            response: {
+              status: '200',
+              statusText: 'OK',
+              headers: [{ name: 'content-type', value: 'image/png', enabled: true }],
+              body: {
+                type: 'binary',
+                content: base64Content
+              }
+            }
+          }
+        ]
+      };
+
+      const bru = jsonToBru(jsonInput);
+      const parsed = bruToJson(bru);
+
+      const parsedBody = parsed.examples[0].response.body;
+      expect(parsedBody.type).toBe('binary');
+      expect(parsedBody.content).toBe(base64Content);
+      expect(Buffer.from(parsedBody.content, 'base64').equals(originalBytes)).toBe(true);
+      expect(jsonToBru(parsed)).toEqual(bru);
+    });
   });
 
   describe('Complex examples with auth', () => {
@@ -306,6 +407,114 @@ example {
         const output = jsonToBru(jsonInput);
         expect(output).toEqual(expected);
       });
+    });
+  });
+
+  describe('Examples with multiline descriptions', () => {
+    it('should parse examples with multiline descriptions', () => {
+      const input = fs.readFileSync(path.join(__dirname, 'fixtures', 'bru', 'examples-multiline-description.bru'), 'utf8');
+      const expected = require('./fixtures/json/examples-multiline-description.json');
+      const output = bruToJson(input);
+
+      expect(output).toEqual(expected);
+    });
+
+    it('should convert examples with multiline descriptions to BRU format', () => {
+      const jsonInput = require('./fixtures/json/examples-multiline-description.json');
+      const expected = fs.readFileSync(path.join(__dirname, 'fixtures', 'bru', 'examples-multiline-description.bru'), 'utf8');
+      const output = jsonToBru(jsonInput);
+
+      expect(output).toEqual(expected);
+    });
+
+    it('should parse example without description field', () => {
+      const bruInput = `meta {
+  name: Test API
+  type: http
+}
+
+example {
+  name: Example Request
+  
+  request: {
+    url: https://api.example.com/example
+    method: get
+  }
+}
+`;
+
+      const output = bruToJson(bruInput);
+
+      expect(output.examples).toBeDefined();
+      expect(output.examples).toHaveLength(1);
+      expect(output.examples[0].name).toBe('Example Request');
+      expect(output.examples[0].description).toBeUndefined();
+    });
+  });
+
+  describe('Examples with multiline strings and contentType', () => {
+    it('should parse examples with multiline strings and @contentType annotations', () => {
+      const input = fs.readFileSync(path.join(__dirname, 'fixtures', 'bru', 'examples-multiline-contenttype.bru'), 'utf8');
+      const expected = require('./fixtures/json/examples-multiline-contenttype.json');
+      const output = bruToJson(input);
+
+      expect(output).toEqual(expected);
+    });
+
+    it('should correctly extract contentType from multiline values', () => {
+      const input = fs.readFileSync(path.join(__dirname, 'fixtures', 'bru', 'examples-multiline-contenttype.bru'), 'utf8');
+      const output = bruToJson(input);
+
+      const example = output.examples[0];
+      const multipartForm = example.request.body.multipartForm;
+
+      // Check that multiline values with @contentType are parsed correctly
+      const testField = multipartForm.find((f) => f.name === 'test');
+      expect(testField).toBeDefined();
+      expect(testField.value).toContain('"hello"');
+      expect(testField.contentType).toBe('application/json');
+
+      // Check single-line value with @contentType
+      const simpleField = multipartForm.find((f) => f.name === 'simple');
+      expect(simpleField).toBeDefined();
+      expect(simpleField.value).toBe('cat and mouse');
+      expect(simpleField.contentType).toBe('text/plain');
+
+      // Check multiline value without @contentType
+      const arrayField = multipartForm.find((f) => f.name === 'array');
+      expect(arrayField).toBeDefined();
+      expect(arrayField.value).toContain('"coolade"');
+      expect(arrayField.contentType).toBe('');
+
+      // Check complex multiline JSON with @contentType
+      const jsonValueField = multipartForm.find((f) => f.name === 'jsonValue');
+      expect(jsonValueField).toBeDefined();
+      expect(jsonValueField.value).toContain('"key": "value"');
+      expect(jsonValueField.contentType).toBe('application/json');
+    });
+
+    it('should handle round-trip conversion for multiline strings with contentType', () => {
+      const originalBru = fs.readFileSync(path.join(__dirname, 'fixtures', 'bru', 'examples-multiline-contenttype.bru'), 'utf8');
+      const jsonFromBru = bruToJson(originalBru);
+      const bruFromJson = jsonToBru(jsonFromBru);
+      const jsonFromBruAgain = bruToJson(bruFromJson);
+
+      // The examples should be preserved through the round-trip
+      expect(jsonFromBruAgain.examples).toBeDefined();
+      expect(Array.isArray(jsonFromBruAgain.examples)).toBe(true);
+      expect(jsonFromBruAgain.examples).toHaveLength(1);
+
+      const example = jsonFromBruAgain.examples[0];
+      const multipartForm = example.request.body.multipartForm;
+
+      // Verify contentType is preserved
+      const testField = multipartForm.find((f) => f.name === 'test');
+      expect(testField.contentType).toBe('application/json');
+      expect(testField.value).toContain('"hello"');
+
+      const jsonValueField = multipartForm.find((f) => f.name === 'jsonValue');
+      expect(jsonValueField.contentType).toBe('application/json');
+      expect(jsonValueField.value).toContain('"key": "value"');
     });
   });
 });

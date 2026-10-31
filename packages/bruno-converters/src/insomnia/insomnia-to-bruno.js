@@ -34,7 +34,7 @@ const addSuffixToDuplicateName = (item, index, allItems) => {
 const regexVariable = new RegExp('{{.*?}}', 'g');
 
 const normalizeVariables = (value) => {
-  value = value || '';
+  value = String(value ?? '');
   const variables = value.match(regexVariable) || [];
   each(variables, (variable) => {
     value = value.replace(variable, variable.replace('_.', '').replaceAll(' ', ''));
@@ -118,7 +118,8 @@ const transformInsomniaRequestItem = (request, index, allRequests) => {
     };
   }
 
-  const mimeType = get(request, 'body.mimeType', '').split(';')[0];
+  const bodyMimeType = get(request, 'body.mimeType');
+  const mimeType = (bodyMimeType || '').split(';')[0];
 
   if (mimeType === 'application/json') {
     brunoRequestItem.request.body.mode = 'json';
@@ -146,7 +147,7 @@ const transformInsomniaRequestItem = (request, index, allRequests) => {
         enabled: !param.disabled
       });
     });
-  } else if (mimeType === 'text/plain') {
+  } else if (mimeType === 'text/plain' || (bodyMimeType === '' && request.body?.text)) {
     brunoRequestItem.request.body.mode = 'text';
     brunoRequestItem.request.body.text = normalizeVariables(request.body.text);
   } else if (mimeType === 'text/xml' || mimeType === 'application/xml') {
@@ -160,7 +161,8 @@ const transformInsomniaRequestItem = (request, index, allRequests) => {
 
   const settings = {
     encodeUrl: request.settings?.encodeUrl !== false && request.settingEncodeUrl !== false, // handles v4 and v5 import
-  }
+    forwardAuthorizationHeader: false
+  };
 
   brunoRequestItem.settings = settings;
 
@@ -259,13 +261,13 @@ const parseInsomniaCollection = (data) => {
 
     brunoCollection.name = insomniaCollection.name;
 
-    const requestsAndFolders =
-    insomniaResources.filter((resource) => resource._type === 'request' || resource._type === 'request_group') ||
-    [];
+    const requestsAndFolders
+      = insomniaResources.filter((resource) => resource._type === 'request' || resource._type === 'request_group')
+        || [];
 
     function createFolderStructure(resources, parentId = null) {
-      const requestGroups =
-        resources.filter((resource) => resource._type === 'request_group' && resource.parentId === parentId) || [];
+      const requestGroups
+        = resources.filter((resource) => resource._type === 'request_group' && resource.parentId === parentId) || [];
       const requests = resources.filter((resource) => resource._type === 'request' && resource.parentId === parentId);
 
       const folders = requestGroups.map((folder, index, allFolder) => {
@@ -274,12 +276,12 @@ const parseInsomniaCollection = (data) => {
           (resource) => resource._type === 'request' && resource.parentId === folder._id
         );
 
-    return {
+        return {
           uid: uuid(),
           name,
           type: 'folder',
           items: createFolderStructure(resources, folder._id).concat(
-            requests.filter(r => r.parentId === folder._id).map(transformInsomniaRequestItem)
+            requests.filter((r) => r.parentId === folder._id).map(transformInsomniaRequestItem)
           )
         };
       });
@@ -300,8 +302,8 @@ const parseInsomniaCollection = (data) => {
 
 export const insomniaToBruno = (insomniaCollection) => {
   try {
-    if(typeof insomniaCollection !== 'object') {
-      insomniaCollection = jsyaml.load(insomniaCollection);
+    if (typeof insomniaCollection !== 'object') {
+      insomniaCollection = jsyaml.load(insomniaCollection, { schema: jsyaml.JSON_SCHEMA });
     }
     let collection;
     if (isInsomniaV5Export(insomniaCollection)) {
@@ -309,7 +311,7 @@ export const insomniaToBruno = (insomniaCollection) => {
     } else {
       collection = parseInsomniaCollection(insomniaCollection);
     }
-    
+
     const transformedCollection = transformItemsInCollection(collection);
     const hydratedCollection = hydrateSeqInCollection(transformedCollection);
     const validatedCollection = validateSchema(hydratedCollection);

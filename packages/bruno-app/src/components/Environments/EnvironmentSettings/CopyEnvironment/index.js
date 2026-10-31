@@ -43,14 +43,22 @@ const CopyEnvironment = ({ collection, environment, onClose }) => {
 
   return (
     <Portal>
-      <Modal size="sm" title={'Copy Environment'} confirmText="Copy" handleConfirm={onSubmit} handleCancel={onClose}>
-        <form className="bruno-form" onSubmit={e => e.preventDefault()}>
+      <Modal
+        size="sm"
+        title="Copy Environment"
+        confirmText="Copy"
+        handleConfirm={onSubmit}
+        handleCancel={onClose}
+        dataTestId="copy-environment-modal"
+      >
+        <form className="bruno-form" onSubmit={(e) => e.preventDefault()}>
           <div>
-            <label htmlFor="name" className="block font-semibold">
+            <label htmlFor="name" className="block font-medium">
               New Environment Name
             </label>
             <input
               id="environment-name"
+              data-testid="copy-environment-name-input"
               type="text"
               name="name"
               ref={inputRef}

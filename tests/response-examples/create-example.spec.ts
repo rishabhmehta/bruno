@@ -1,6 +1,7 @@
 import { execSync } from 'child_process';
 import { test, expect } from '../../playwright';
 import path from 'path';
+import { clickResponseAction, toggleRequestExamples } from '../utils/page/actions';
 
 test.describe.serial('Create and Delete Response Examples', () => {
   test.afterAll(async () => {
@@ -10,14 +11,14 @@ test.describe.serial('Create and Delete Response Examples', () => {
 
   test('should create a response example from response bookmark', async ({ pageWithUserData: page }) => {
     await test.step('Open collection and request', async () => {
-      await page.locator('#sidebar-collection-name').getByText('collection').click();
-      await page.locator('.collection-item-name').getByText('create-example').click();
+      await page.locator('#sidebar-collection-name').filter({ hasText: 'collection' }).click();
+      await page.locator('.collection-item-name').filter({ hasText: 'create-example' }).click();
     });
 
     await test.step('Send request and validate example creation', async () => {
       await page.getByTestId('send-arrow-icon').click();
       // Wait for 30 seconds for the response bookmark button to be visible, on slower internet connections it may take longer to get the response.
-      await page.getByTestId('response-bookmark-btn').click({ timeout: 30000 });
+      await clickResponseAction(page, 'response-bookmark-btn');
 
       await expect(page.getByText('Save Response as Example')).toBeVisible();
       await expect(page.getByTestId('create-example-name-input')).toBeVisible();
@@ -39,7 +40,7 @@ test.describe.serial('Create and Delete Response Examples', () => {
 
     await test.step('Validate error when name is empty', async () => {
       await page.getByTestId('send-arrow-icon').click();
-      await page.getByTestId('response-bookmark-btn').click({ timeout: 30000 });
+      await clickResponseAction(page, 'response-bookmark-btn');
 
       await expect(page.getByRole('button', { name: 'Create Example' })).toBeEnabled();
 
@@ -48,10 +49,10 @@ test.describe.serial('Create and Delete Response Examples', () => {
       await page.getByRole('button', { name: 'Create Example' }).click();
       await expect(page.getByTestId('name-error')).toBeVisible();
       await expect(page.getByTestId('name-error')).toHaveText('Example name is required');
-    });
 
-    await test.step('Create example with valid name', async () => {
-      await page.getByTestId('create-example-name-input').fill('Required Name');
+      await page.getByTestId('create-example-name-input').clear();
+      await page.getByTestId('create-example-name-input').fill('New Required Name');
+      await expect(page.getByRole('button', { name: 'Create Example' })).toBeEnabled();
       await page.getByRole('button', { name: 'Create Example' }).click();
 
       // Modal should close and example should be created
@@ -63,7 +64,7 @@ test.describe.serial('Create and Delete Response Examples', () => {
     await test.step('Test modal cancellation', async () => {
       await page.locator('.collection-item-name').getByText('create-example').click();
       await page.getByTestId('send-arrow-icon').click();
-      await page.getByTestId('response-bookmark-btn').click({ timeout: 30000 });
+      await clickResponseAction(page, 'response-bookmark-btn');
       await page.getByRole('button', { name: 'Cancel' }).click();
       await expect(page.getByText('Save Response as Example')).not.toBeVisible();
     });
@@ -76,14 +77,14 @@ test.describe.serial('Create and Delete Response Examples', () => {
     });
 
     await test.step('Test form reset', async () => {
-      await page.locator('#send-request').getByRole('img').nth(2).click();
-      await page.getByTestId('response-bookmark-btn').click({ timeout: 30000 });
+      await page.getByTestId('send-arrow-icon').click();
+      await clickResponseAction(page, 'response-bookmark-btn');
 
       await page.getByTestId('create-example-name-input').fill('Test Name');
       await page.getByTestId('create-example-description-input').fill('Test Description');
       await page.getByRole('button', { name: 'Cancel' }).click();
 
-      await page.getByTestId('response-bookmark-btn').click({ timeout: 30000 });
+      await clickResponseAction(page, 'response-bookmark-btn');
       // The name field should have the pre-filled default value
       await expect(page.getByTestId('create-example-name-input')).toHaveValue('example');
       // Description should still be empty
@@ -100,7 +101,7 @@ test.describe.serial('Create and Delete Response Examples', () => {
 
     await test.step('Create example and verify sidebar visibility', async () => {
       await page.getByTestId('send-arrow-icon').click();
-      await page.getByTestId('response-bookmark-btn').click({ timeout: 30000 });
+      await clickResponseAction(page, 'response-bookmark-btn');
 
       await page.getByTestId('create-example-name-input').clear();
       await page.getByTestId('create-example-name-input').fill('Sidebar Test Example');
@@ -111,7 +112,7 @@ test.describe.serial('Create and Delete Response Examples', () => {
     });
 
     await test.step('Verify example appears in sidebar', async () => {
-      await page.locator('.collection-item-name', { hasText: 'create-example' }).getByTestId('request-item-chevron').click();
+      await toggleRequestExamples(page, 'create-example', true);
       const exampleItem = page.locator('.collection-item-name').getByText('Sidebar Test Example', { exact: true });
       await expect(exampleItem).toBeVisible();
     });

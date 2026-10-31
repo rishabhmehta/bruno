@@ -1,47 +1,19 @@
-const { NodeVM } = require('@usebruno/vm2');
-const { runScriptInNodeVm } = require('../sandbox/node-vm');
 const chai = require('chai');
-const path = require('path');
-const http = require('http');
-const https = require('https');
-const stream = require('stream');
-const util = require('util');
-const zlib = require('zlib');
-const url = require('url');
-const punycode = require('punycode');
-const fs = require('fs');
-const { get } = require('lodash');
 const Bru = require('../bru');
+const { getUnresolvedVariableCollector } = require('../unresolved-variables');
 const BrunoRequest = require('../bruno-request');
 const BrunoResponse = require('../bruno-response');
-const Test = require('../test');
-const TestResults = require('../test-results');
 const { cleanJson } = require('../utils');
 const { createBruTestResultMethods } = require('../utils/results');
-
-// Inbuilt Library Support
-const ajv = require('ajv');
-const addFormats = require('ajv-formats');
-const atob = require('atob');
-const btoa = require('btoa');
-const lodash = require('lodash');
-const moment = require('moment');
-const uuid = require('uuid');
-const nanoid = require('nanoid');
-const axios = require('axios');
-const fetch = require('node-fetch');
-const CryptoJS = require('crypto-js');
-const NodeVault = require('node-vault');
-const xml2js = require('xml2js');
-const cheerio = require('cheerio');
-const tv4 = require('tv4');
+const { runScriptInNodeVm } = require('../sandbox/node-vm');
 const jsonwebtoken = require('jsonwebtoken');
 const { executeQuickJsVmAsync } = require('../sandbox/quickjs');
-const { mixinTypedArrays } = require('../sandbox/mixins/typed-arrays');
+const { SANDBOX } = require('../utils/sandbox');
+const { bindRunRequest, createScopeSetter } = require('./scripted-entries');
 
 class TestRuntime {
   constructor(props) {
-    this.runtime = props?.runtime || 'vm2';
+    this.runtime = props?.runtime || 'quickjs';
   }
 
   async runTests(
@@ -58,43 +30,47 @@ class TestRuntime {
     collectionName
   ) {
     const globalEnvironmentVariables = request?.globalEnvironmentVariables || {};
+    const oauth2CredentialVariables = request?.oauth2CredentialVariables || {};
     const collectionVariables = request?.collectionVariables || {};
     const folderVariables = request?.folderVariables || {};
     const requestVariables = request?.requestVariables || {};
+    const promptVariables = request?.promptVariables || {};
     const assertionResults = request?.assertionResults || [];
-    const bru = new Bru(envVariables, runtimeVariables, processEnvVars, collectionPath, collectionVariables, folderVariables, requestVariables, globalEnvironmentVariables, {}, collectionName);
+    const certsAndProxyConfig = request?.certsAndProxyConfig;
+    const scriptPath = request?.pathname;
+    const bru = new Bru({
+      runtime: this.runtime,
+      envVariables,
+      runtimeVariables,
+      processEnvVars,
+      collectionPath,
+      collectionVariables,
+      folderVariables,
+      requestVariables,
+      globalEnvironmentVariables,
+      oauth2CredentialVariables,
+      collectionName,
+      promptVariables,
+      certsAndProxyConfig,
+      requestUrl: request?.url,
+      onUnresolved: getUnresolvedVariableCollector(request)
+    });
     const req = new BrunoRequest(request);
     const res = new BrunoResponse(response);
-    const allowScriptFilesystemAccess = get(scriptingConfig, 'filesystemAccess.allow', false);
-    const moduleWhitelist = get(scriptingConfig, 'moduleWhitelist', []);
-    const additionalContextRoots = get(scriptingConfig, 'additionalContextRoots', []);
-    const additionalContextRootsAbsolute = lodash
-      .chain(additionalContextRoots)
-      .map((acr) => (acr.startsWith('/') ? acr : path.join(collectionPath, acr)))
-      .value();
-
-    const whitelistedModules = {};
-
-    for (let module of moduleWhitelist) {
-      try {
-        whitelistedModules[module] = require(module);
-      } catch (e) {
-        // Ignore
-        console.warn(e);
-      }
-    }
 
     // extend bru with result getter methods
-    const { __brunoTestResults, test } = createBruTestResultMethods(bru, assertionResults, chai);
+    const { __brunoTestResults, test, waitForPendingTests } = createBruTestResultMethods(bru, assertionResults, chai);
 
     if (!testsFile || !testsFile.length) {
       return {
         request,
-        envVariables,
-        runtimeVariables,
-        globalEnvironmentVariables,
+        envVariables: null,
+        runtimeVariables: null,
+        collectionVariables: null,
+        globalEnvironmentVariables: null,
         results: __brunoTestResults.getResults(),
-        nextRequestName: bru.nextRequest
+        nextRequestName: bru.nextRequest,
+        stopExecution: bru.stopExecution
       };
     }
 
@@ -106,12 +82,9 @@ class TestRuntime {
       expect: chai.expect,
       assert: chai.assert,
       __brunoTestResults: __brunoTestResults,
-      jwt: jsonwebtoken
+      jwt: jsonwebtoken,
+      __bruSetScope: createScopeSetter(bru)
     };
-
-    if (this.runtime === 'vm2') {
-      mixinTypedArrays(context);
-    }
 
     if (onConsoleLog && typeof onConsoleLog === 'function') {
       const customLogger = (type) => {
@@ -128,83 +101,48 @@ class TestRuntime {
       };
     }
 
-    if(runRequestByItemPathname) {
-      context.bru.runRequest = runRequestByItemPathname;
-    }
+    bindRunRequest(bru, runRequestByItemPathname);
 
     let scriptError = null;
 
-    try {
-      if (this.runtime === 'quickjs') {
-        await executeQuickJsVmAsync({
-          script: testsFile,
-          context: context,
-          collectionPath
-        });
-      } else if (this.runtime === 'nodevm') {
+    if (this.runtime === SANDBOX.NODEVM) {
+      try {
         await runScriptInNodeVm({
           script: testsFile,
           context,
           collectionPath,
-          scriptingConfig
+          scriptingConfig,
+          scriptPath
         });
-      } else {
-        // default runtime is vm2
-        const vm = new NodeVM({
-          sandbox: context,
-          require: {
-            context: 'sandbox',
-            external: true,
-            builtin: ['*'],
-            root: [collectionPath, ...additionalContextRootsAbsolute],
-            mock: {
-              // node libs
-              path,
-              stream,
-              util,
-              url,
-              http,
-              https,
-              punycode,
-              zlib,
-              // 3rd party libs
-              ajv,
-              'ajv-formats': addFormats,
-              btoa,
-              atob,
-              lodash,
-              moment,
-              uuid,
-              nanoid,
-              axios,
-              chai,
-              'node-fetch': fetch,
-              'crypto-js': CryptoJS,
-              'xml2js': xml2js,
-              cheerio,
-              tv4,
-              'jsonwebtoken': jsonwebtoken,
-              ...whitelistedModules,
-              fs: allowScriptFilesystemAccess ? fs : undefined,
-              'node-vault': NodeVault
-            }
-          }
-        });
-        const asyncVM = vm.run(`module.exports = async () => { ${testsFile}}`, path.join(collectionPath, 'vm.js'));
-        await asyncVM();
+      } catch (error) {
+        scriptError = error;
       }
-    } catch (error) {
-      scriptError = error;
+      await waitForPendingTests();
+    } else {
+      // default runtime is `quickjs`
+      try {
+        await executeQuickJsVmAsync({
+          script: testsFile,
+          context: context,
+          collectionPath,
+          scriptPath
+        });
+      } catch (error) {
+        scriptError = error;
+      }
     }
 
     const result = {
       request,
-      envVariables: cleanJson(envVariables),
-      runtimeVariables: cleanJson(runtimeVariables),
-      globalEnvironmentVariables: cleanJson(globalEnvironmentVariables),
-      persistentEnvVariables: cleanJson(bru.persistentEnvVariables),
+      envVariables: bru._envDirty ? cleanJson(envVariables) : null,
+      runtimeVariables: bru._runtimeVarsDirty ? cleanJson(runtimeVariables) : null,
+      collectionVariables: bru._collVarsDirty ? cleanJson(collectionVariables) : null,
+      globalEnvironmentVariables: bru._globalEnvDirty ? cleanJson(globalEnvironmentVariables) : null,
+      oauth2CredentialsToReset: bru.oauth2CredentialsToReset,
       results: cleanJson(__brunoTestResults.getResults()),
-      nextRequestName: bru.nextRequest
+      nextRequestName: bru.nextRequest,
+      stopExecution: bru.stopExecution,
+      scriptedRequestEntries: cleanJson(bru.scriptedRequestEntries || [])
     };
 
     if (scriptError) {

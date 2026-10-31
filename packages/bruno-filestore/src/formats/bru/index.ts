@@ -7,11 +7,26 @@ import {
   collectionBruToJson as _collectionBruToJson,
   jsonToCollectionBru as _jsonToCollectionBru
 } from '@usebruno/lang';
+import { normalizeTags } from '@usebruno/common';
 import { getOauth2AdditionalParameters } from './utils/oauth2-additional-params';
 
-export const bruRequestToJson = (data: string | any, parsed: boolean = false): any => {
+export const parseBruRequest = (data: string | any, parsed: boolean = false): any => {
   try {
     const json = parsed ? data : bruToJsonV2(data);
+
+    if (_.get(json, 'meta.type') === 'app') {
+      const seq = _.get(json, 'meta.seq');
+      const tags = _.get(json, 'meta.tags', []);
+      return {
+        type: 'app',
+        name: _.get(json, 'meta.name'),
+        seq: !_.isNaN(seq) ? Number(seq) : 1,
+        tags: Array.isArray(tags) ? tags : [],
+        settings: _.get(json, 'settings', {}),
+        app: { code: _.get(json, 'app.code', null) },
+        request: null
+      };
+    }
 
     let requestType = _.get(json, 'meta.type');
     switch (requestType) {
@@ -32,17 +47,25 @@ export const bruRequestToJson = (data: string | any, parsed: boolean = false): a
     }
 
     const sequence = _.get(json, 'meta.seq');
+    const tags = _.get(json, 'meta.tags', []);
     const urlPath: Record<typeof requestType, string> = {
       'grpc-request': 'grpc.url',
       'ws-request': 'ws.url',
       'default': 'http.url'
     };
+
+    const appData = _.get(json, 'app');
+    const app = appData
+      ? { code: _.get(appData, 'code', null), enabled: _.get(appData, 'enabled', false) === true }
+      : null;
+
     const transformedJson = {
       type: requestType,
       name: _.get(json, 'meta.name'),
       seq: !_.isNaN(sequence) ? Number(sequence) : 1,
       settings: _.get(json, 'settings', {}),
-      tags: _.get(json, 'meta.tags', []),
+      app,
+      tags: Array.isArray(tags) ? tags : [],
       request: {
         // Preserving special characters in custom methods. Using _.upperCase strips special characters.
         method:
@@ -109,13 +132,29 @@ export const bruRequestToJson = (data: string | any, parsed: boolean = false): a
     }
     return transformedJson;
   } catch (error) {
-    console.log('bruRequestToJson error', error);
+    console.log('parseBruRequest error', error);
     throw error;
   }
 };
 
-export const jsonRequestToBru = (json: any): string => {
+export const stringifyBruRequest = (json: any): string => {
   try {
+    // Standalone app item — emit only meta + the app code block.
+    if (_.get(json, 'type') === 'app') {
+      const seq = _.get(json, 'seq');
+      const bruJson: any = {
+        meta: {
+          name: _.get(json, 'name'),
+          type: 'app',
+          seq: !_.isNaN(seq) ? Number(seq) : 1,
+          tags: _.get(json, 'tags', [])
+        },
+        settings: _.get(json, 'settings', {}),
+        app: { code: _.get(json, 'app.code', '') }
+      };
+      return jsonToBruV2(bruJson);
+    }
+
     let type = _.get(json, 'type');
     switch (type) {
       case 'http-request':
@@ -160,8 +199,8 @@ export const jsonRequestToBru = (json: any): string => {
         mode: 'json',
         json: '{}'
       });
-    } // For gRPC, add gRPC-specific structure but maintain field names
-    else if (type === 'grpc') {
+    } else if (type === 'grpc') {
+      // For gRPC, add gRPC-specific structure but maintain field names
       bruJson.grpc = {
         url: _.get(json, 'request.url'),
         auth: _.get(json, 'request.auth.mode', 'none'),
@@ -220,6 +259,11 @@ export const jsonRequestToBru = (json: any): string => {
     bruJson.docs = _.get(json, 'request.docs', '');
     bruJson.examples = _.get(json, 'examples', []).map((e: any) => jsonExampleToBru(e));
 
+    const app = _.get(json, 'app');
+    if (app && (app.enabled === true || (app.code && app.code.length))) {
+      bruJson.app = { code: app.code || null, enabled: app.enabled === true };
+    }
+
     const bru = jsonToBruV2(bruJson);
     return bru;
   } catch (error) {
@@ -227,7 +271,7 @@ export const jsonRequestToBru = (json: any): string => {
   }
 };
 
-export const bruCollectionToJson = (data: string | any, parsed: boolean = false): any => {
+export const parseBruCollection = (data: string | any, parsed: boolean = false): any => {
   try {
     const json = parsed ? data : _collectionBruToJson(data);
 
@@ -255,6 +299,11 @@ export const bruCollectionToJson = (data: string | any, parsed: boolean = false)
         const sequence = json.meta.seq;
         transformedJson.meta.seq = !isNaN(sequence) ? Number(sequence) : 1;
       }
+
+      const tags = normalizeTags(json.meta.tags);
+      if (tags.length) {
+        transformedJson.meta.tags = tags;
+      }
     }
 
     // add oauth2 additional parameters if they exist
@@ -273,7 +322,7 @@ export const bruCollectionToJson = (data: string | any, parsed: boolean = false)
   }
 };
 
-export const jsonCollectionToBru = (json: any, isFolder?: boolean): string => {
+export const stringifyBruCollection = (json: any, isFolder?: boolean): string => {
   try {
     const collectionBruJson: any = {
       headers: _.get(json, 'request.headers', []),
@@ -302,6 +351,13 @@ export const jsonCollectionToBru = (json: any, isFolder?: boolean): string => {
         const sequence = json.meta.seq;
         collectionBruJson.meta.seq = !isNaN(sequence) ? Number(sequence) : 1;
       }
+
+      if (isFolder) {
+        const tags = normalizeTags(json.meta.tags);
+        if (tags.length) {
+          collectionBruJson.meta.tags = tags;
+        }
+      }
     }
 
     if (!isFolder) {
@@ -314,7 +370,7 @@ export const jsonCollectionToBru = (json: any, isFolder?: boolean): string => {
   }
 };
 
-export const bruEnvironmentToJson = (bru: string): any => {
+export const parseBruEnvironment = (bru: string): any => {
   try {
     const json = bruToEnvJsonV2(bru);
 
@@ -331,7 +387,7 @@ export const bruEnvironmentToJson = (bru: string): any => {
   }
 };
 
-export const jsonEnvironmentToBru = (json: any): string => {
+export const stringifyBruEnvironment = (json: any): string => {
   try {
     const bru = envJsonToBruV2(json);
     return bru;
@@ -367,6 +423,17 @@ export const bruExampleToJson = (data: string | any, parsed: boolean = false, pa
         transformedType = 'http-request';
     }
 
+    /**
+     * Backward compatibility (pre-v3.0.2 - v3.2.0): Postman imports before PR #6876 stored status/statusText swapped
+     * (code: "OK", text: "202" instead of code: 202, text: "OK"). Detect and swap back.
+     * TODO(Sid / Shubh): Remove after v5 — all collections should be migrated by then.
+     */
+    let status = _.get(json, 'response.status', '200');
+    let statusText = _.get(json, 'response.statusText', 'OK');
+    if (isNaN(Number(status)) && !isNaN(Number(statusText))) {
+      [status, statusText] = [statusText, status];
+    }
+
     // Follow the same structure as the main request, but with missing fields for examples
     const transformedJson = {
       type: transformedType,
@@ -388,8 +455,8 @@ export const bruExampleToJson = (data: string | any, parsed: boolean = false, pa
           name: header.name,
           value: header.value
         })),
-        status: String(_.get(json, 'response.status', '200')),
-        statusText: _.get(json, 'response.statusText', 'OK'),
+        status: Number(status) || 200,
+        statusText: statusText || 'OK',
         body: {
           type: _.get(json, 'response.body.type', 'json'),
           content: _.get(json, 'response.body.content', '')

@@ -21,7 +21,7 @@ if (!SERVER_RENDERED) {
       }
       return [];
     }
-    
+
     // Set default options for Bruno
     const defaultOptions = {
       esversion: 11,
@@ -33,24 +33,24 @@ if (!SERVER_RENDERED) {
       module: true,
       node: true,
       predef: {
-        'bru': false,
-        'req': false,
-        'res': false,
-        'test': false,
-        'expect': false,
-        'require': false,
-        'module': false
+        bru: false,
+        req: false,
+        res: false,
+        test: false,
+        expect: false,
+        require: false,
+        module: false
       }
     };
-    
+
     // Merge provided options with defaults
     options = Object.assign({}, defaultOptions, options);
-    
+
     if (!options.indent)
       // JSHint error.character actually is a column index, this fixes underlining on lines using tabs for indentation
       options.indent = 1; // JSHint default value is 4
     JSHINT(text, options, options.globals);
-    var errors = JSHINT.data().errors,
+    let errors = JSHINT.data().errors,
       result = [];
 
     /*
@@ -68,9 +68,9 @@ if (!SERVER_RENDERED) {
     errors = filter(errors, (error) => {
       if (error.code === 'E058' || error.code === 'W024') {
         if (
-          error.evidence &&
-          error.evidence.includes('await') &&
-          error.scope === '(main)'
+          error.evidence
+          && error.evidence.includes('await')
+          && error.scope === '(main)'
         ) {
           return false;
         }
@@ -80,7 +80,7 @@ if (!SERVER_RENDERED) {
 
       /*
        * Filter out errors due to atob/btoa redefinition
-       * 
+       *
        * - W079: Redefinition of '{a}'
        *   This JSHint warning triggers when a variable name conflicts with a built-in global.
        *   We filter this for atob/btoa to allow explicit requires in Node.js environments
@@ -101,8 +101,8 @@ if (!SERVER_RENDERED) {
   CodeMirror.registerHelper('lint', 'javascript', validator);
 
   function parseErrors(errors, output) {
-    for (var i = 0; i < errors.length; i++) {
-      var error = errors[i];
+    for (let i = 0; i < errors.length; i++) {
+      let error = errors[i];
       if (error) {
         if (error.line <= 0) {
           if (window.console) {
@@ -111,17 +111,17 @@ if (!SERVER_RENDERED) {
           continue;
         }
 
-        var start = error.character - 1,
+        let start = error.character - 1,
           end = start + 1;
         if (error.evidence) {
-          var index = error.evidence.substring(start).search(/.\b/);
+          let index = error.evidence.substring(start).search(/.\b/);
           if (index > -1) {
             end += index;
           }
         }
 
         // Convert to format expected by validation service
-        var hint = {
+        let hint = {
           message: error.reason,
           severity: error.code ? (error.code.startsWith('W') ? 'warning' : 'error') : 'error',
           from: CodeMirror.Pos(error.line - 1, start),

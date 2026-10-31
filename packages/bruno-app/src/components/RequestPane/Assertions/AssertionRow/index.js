@@ -3,6 +3,7 @@ import { IconTrash } from '@tabler/icons';
 import SingleLineEditor from 'components/SingleLineEditor';
 import AssertionOperator from '../AssertionOperator';
 import { useTheme } from 'providers/Theme';
+import { AUTOCOMPLETE_TRIGGER } from 'utils/common/constants';
 
 /**
  * Assertion operators
@@ -160,8 +161,7 @@ const AssertionRow = ({
               },
               assertion,
               'value'
-            )
-          }
+            )}
         />
       </td>
       <td>
@@ -179,12 +179,12 @@ const AssertionRow = ({
                 },
                 assertion,
                 'value'
-              )
-              }
-            }
+              );
+            }}
             onRun={handleRun}
             collection={collection}
             item={item}
+            variableAutocomplete={AUTOCOMPLETE_TRIGGER.DOUBLE_BRACE}
           />
         ) : (
           <input type="text" className="cursor-default" disabled />

@@ -1,14 +1,23 @@
 const { forOwn, cloneDeep } = require('lodash');
-const { interpolate } = require('@usebruno/common');
+const { interpolate, interpolateObject: interpolateObjectCommon } = require('@usebruno/common');
 
-const interpolateString = (str, { globalEnvironmentVariables, envVars, runtimeVariables, processEnvVars }) => {
-  if (!str || !str.length || typeof str !== 'string') {
-    return str;
-  }
-
+const buildCombinedVars = ({
+  globalEnvironmentVariables,
+  collectionVariables,
+  envVars,
+  folderVariables,
+  requestVariables,
+  runtimeVariables,
+  processEnvVars,
+  promptVariables
+}) => {
   processEnvVars = processEnvVars || {};
   runtimeVariables = runtimeVariables || {};
   globalEnvironmentVariables = globalEnvironmentVariables || {};
+  collectionVariables = collectionVariables || {};
+  folderVariables = folderVariables || {};
+  requestVariables = requestVariables || {};
+  promptVariables = promptVariables || {};
 
   // we clone envVars because we don't want to modify the original object
   envVars = envVars ? cloneDeep(envVars) : {};
@@ -25,21 +34,41 @@ const interpolateString = (str, { globalEnvironmentVariables, envVars, runtimeVa
     });
   });
 
-  // runtimeVariables take precedence over envVars
-  const combinedVars = {
+  return {
     ...globalEnvironmentVariables,
+    ...collectionVariables,
     ...envVars,
+    ...folderVariables,
+    ...requestVariables,
     ...runtimeVariables,
+    ...promptVariables,
     process: {
       env: {
         ...processEnvVars
       }
     }
   };
+};
 
-  return interpolate(str, combinedVars);
+const interpolateString = (str, interpolationOptions) => {
+  if (!str || !str.length || typeof str !== 'string') {
+    return str;
+  }
+
+  const { onUnresolved } = interpolationOptions;
+  const combinedVars = buildCombinedVars(interpolationOptions);
+  return interpolate(str, combinedVars, { onUnresolved });
+};
+
+/**
+ * Recursively interpolates all string values in an object
+ */
+const interpolateObject = (obj, interpolationOptions) => {
+  const combinedVars = buildCombinedVars(interpolationOptions);
+  return interpolateObjectCommon(obj, combinedVars);
 };
 
 module.exports = {
-  interpolateString
+  interpolateString,
+  interpolateObject
 };

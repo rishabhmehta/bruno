@@ -1,20 +1,29 @@
-import QueryResult from "components/ResponsePane/QueryResult/index";
-import { useState } from "react";
+import { useState } from 'react';
+import { IconChevronDown, IconChevronRight } from '@tabler/icons';
+import QueryResponse from 'components/ResponsePane/QueryResponse/index';
 
-const BodyBlock = ({ collection, data, dataBuffer, headers, error, item }) => {
-  const [isBodyCollapsed, toggleBody] = useState(true);
+const BodyBlock = ({ collection, data, dataBuffer, headers, error, item, type, isLoaded }) => {
+  const [isOpen, setIsOpen] = useState(true);
+  const hasBody = Boolean(data || dataBuffer) || isLoaded;
+
   return (
-    <div className="collapsible-section">
-    <div className="section-header" onClick={() => toggleBody(!isBodyCollapsed)}>
-      <pre className="flex flex-row items-center text-indigo-500/80 dark:text-indigo-500/80">
-        <div className="opacity-70">{isBodyCollapsed ? '▼' : '▶'}</div> Body
-      </pre>
-    </div>
-    {isBodyCollapsed && (
-      <div className="mt-2">
-        {data || dataBuffer ? (
+    <div className="tl-block">
+      <button
+        type="button"
+        className="tl-block-h"
+        aria-expanded={isOpen}
+        data-testid="response-body-toggle"
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        <span className="tl-block-chev">
+          {isOpen ? <IconChevronDown size={12} strokeWidth={2} /> : <IconChevronRight size={12} strokeWidth={2} />}
+        </span>
+        Body
+      </button>
+      {isOpen && (
+        hasBody ? (
           <div className="h-96 overflow-auto">
-            <QueryResult
+            <QueryResponse
               item={item}
               collection={collection}
               data={data}
@@ -22,15 +31,16 @@ const BodyBlock = ({ collection, data, dataBuffer, headers, error, item }) => {
               headers={headers}
               error={error}
               key={item?.uid}
+              hideResultTypeSelector={type === 'request'}
+              docKey={`timeline-body:${type}:${item?.uid}`}
             />
           </div>
         ) : (
-          <div className="text-gray-500">No Body found</div>
-        )}
-      </div>
-    )}
-  </div>
-  )
-}
+          <div className="tl-empty">No Body</div>
+        )
+      )}
+    </div>
+  );
+};
 
 export default BodyBlock;

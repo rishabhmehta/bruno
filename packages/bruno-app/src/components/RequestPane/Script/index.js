@@ -1,19 +1,71 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import get from 'lodash/get';
+import find from 'lodash/find';
 import { useDispatch, useSelector } from 'react-redux';
 import CodeEditor from 'components/CodeEditor';
 import { updateRequestScript, updateResponseScript } from 'providers/ReduxStore/slices/collections';
 import { sendRequest, saveRequest } from 'providers/ReduxStore/slices/collections/actions';
+import { updateScriptPaneTab } from 'providers/ReduxStore/slices/tabs';
 import { useTheme } from 'providers/Theme';
-import StyledWrapper from './StyledWrapper';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from 'components/Tabs';
+import StatusDot from 'components/StatusDot';
+import { usePersistedState } from 'hooks/usePersistedState';
+import { useFocusErrorLine } from 'hooks/useFocusErrorLine';
+import { getActiveScriptTab } from 'utils/tabs';
 
 const Script = ({ item, collection }) => {
   const dispatch = useDispatch();
+  const preRequestEditorRef = useRef(null);
+  const postResponseEditorRef = useRef(null);
   const requestScript = item.draft ? get(item, 'draft.request.script.req') : get(item, 'request.script.req');
   const responseScript = item.draft ? get(item, 'draft.request.script.res') : get(item, 'request.script.res');
 
+  const tabs = useSelector((state) => state.tabs.tabs);
+  const activeTabUid = useSelector((state) => state.tabs.activeTabUid);
+  const focusedTab = find(tabs, (t) => t.uid === activeTabUid);
+  const scriptPaneTab = focusedTab?.scriptPaneTab;
+
+  const activeTab = getActiveScriptTab(scriptPaneTab, requestScript);
+
   const { displayedTheme } = useTheme();
   const preferences = useSelector((state) => state.app.preferences);
+
+  const [preReqScroll, setPreReqScroll] = usePersistedState({ key: `request-pre-req-scroll-${item.uid}`, default: 0 });
+  const [postResScroll, setPostResScroll] = usePersistedState({ key: `request-post-res-scroll-${item.uid}`, default: 0 });
+
+  // Refresh CodeMirror when tab becomes visible and restore scroll position.
+  // CodeMirror's scrollTo() is silently ignored when the editor is inside a display:none container
+  // (TabsContent hides inactive tabs via display:none). So the scroll set during componentDidMount
+  // is lost for the hidden editor. After refresh() recalculates layout, we re-apply scrollTo().
+  // The same workaround lives in RequestPane/GrpcScript/ScriptEditorPane — the two are independent
+  // copies, so a fix here does not reach it.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (activeTab === 'pre-request' && preRequestEditorRef.current?.editor) {
+        preRequestEditorRef.current.editor.refresh();
+        preRequestEditorRef.current.editor.scrollTo(null, preReqScroll);
+      } else if (activeTab === 'post-response' && postResponseEditorRef.current?.editor) {
+        postResponseEditorRef.current.editor.refresh();
+        postResponseEditorRef.current.editor.scrollTo(null, postResScroll);
+      }
+    }, 0);
+
+    return () => clearTimeout(timer);
+  }, [activeTab]);
+
+  useFocusErrorLine({
+    uid: item.uid,
+    editorRef: preRequestEditorRef,
+    scriptPhase: 'pre-request',
+    isVisible: activeTab === 'pre-request'
+  });
+
+  useFocusErrorLine({
+    uid: item.uid,
+    editorRef: postResponseEditorRef,
+    scriptPhase: 'post-response',
+    isVisible: activeTab === 'post-response'
+  });
 
   const onRequestScriptEdit = (value) => {
     dispatch(
@@ -38,39 +90,78 @@ const Script = ({ item, collection }) => {
   const onRun = () => dispatch(sendRequest(item, collection.uid));
   const onSave = () => dispatch(saveRequest(item.uid, collection.uid));
 
+  const hasPreRequestScript = requestScript && requestScript.trim().length > 0;
+  const hasPostResponseScript = responseScript && responseScript.trim().length > 0;
+
+  const onScriptTabChange = (tab) => {
+    dispatch(updateScriptPaneTab({ uid: item.uid, scriptPaneTab: tab }));
+  };
+
   return (
-    <StyledWrapper className="w-full flex flex-col">
-      <div className="flex flex-col flex-1 mt-2 gap-y-2">
-        <div className="title text-xs">Pre Request</div>
-        <CodeEditor
-          collection={collection}
-          value={requestScript || ''}
-          theme={displayedTheme}
-          font={get(preferences, 'font.codeFont', 'default')}
-          fontSize={get(preferences, 'font.codeFontSize')}
-          onEdit={onRequestScriptEdit}
-          mode="javascript"
-          onRun={onRun}
-          onSave={onSave}
-          showHintsFor={['req', 'bru']}
-        />
-      </div>
-      <div className="flex flex-col flex-1 mt-2 gap-y-2">
-        <div className="title text-xs">Post Response</div>
-        <CodeEditor
-          collection={collection}
-          value={responseScript || ''}
-          theme={displayedTheme}
-          font={get(preferences, 'font.codeFont', 'default')}
-          fontSize={get(preferences, 'font.codeFontSize')}
-          onEdit={onResponseScriptEdit}
-          mode="javascript"
-          onRun={onRun}
-          onSave={onSave}
-          showHintsFor={['req', 'res', 'bru']}
-        />
-      </div>
-    </StyledWrapper>
+    <div className="w-full h-full flex flex-col">
+      <Tabs value={activeTab} onValueChange={onScriptTabChange}>
+        <TabsList dataTestId="script-sub-tabs">
+          <TabsTrigger value="pre-request">
+            Pre Request
+            {hasPreRequestScript && (
+              <StatusDot type={item.preRequestScriptErrorMessage ? 'error' : 'default'} />
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="post-response">
+            Post Response
+            {hasPostResponseScript && (
+              <StatusDot type={item.postResponseScriptErrorMessage ? 'error' : 'default'} />
+            )}
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="pre-request" className="mt-2" dataTestId="pre-request-script-editor">
+          <div className="relative h-full">
+            <CodeEditor
+              ref={preRequestEditorRef}
+              collection={collection}
+              item={item}
+              docKey="script:pre-request"
+              value={requestScript || ''}
+              theme={displayedTheme}
+              font={get(preferences, 'font.codeFont', 'default')}
+              fontSize={get(preferences, 'font.codeFontSize')}
+              onEdit={onRequestScriptEdit}
+              mode="javascript"
+              onRun={onRun}
+              onSave={onSave}
+              showHintsFor={['req', 'bru']}
+              scriptType="pre-request"
+              initialScroll={preReqScroll}
+              onScroll={setPreReqScroll}
+            />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="post-response" className="mt-2" dataTestId="post-response-script-editor">
+          <div className="relative h-full">
+            <CodeEditor
+              ref={postResponseEditorRef}
+              collection={collection}
+              item={item}
+              docKey="script:post-response"
+              value={responseScript || ''}
+              theme={displayedTheme}
+              font={get(preferences, 'font.codeFont', 'default')}
+              fontSize={get(preferences, 'font.codeFontSize')}
+              onEdit={onResponseScriptEdit}
+              mode="javascript"
+              onRun={onRun}
+              onSave={onSave}
+              showHintsFor={['req', 'res', 'bru']}
+              scriptType="post-response"
+              initialScroll={postResScroll}
+              onScroll={setPostResScroll}
+            />
+          </div>
+        </TabsContent>
+      </Tabs>
+    </div>
   );
 };
 

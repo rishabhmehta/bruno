@@ -1,136 +1,265 @@
 import each from 'lodash/each';
 import get from 'lodash/get';
 import jsyaml from 'js-yaml';
-import { validateSchema, transformItemsInCollection, hydrateSeqInCollection, uuid } from '../common';
+import { validateSchema, transformItemsInCollection, hydrateSeqInCollection, uuid, sanitizeTag, sanitizeTags } from '../common';
+import { swagger2ToBruno } from './swagger2-to-bruno';
+import {
+  ensureUrl,
+  BODY_TYPE_HANDLERS,
+  getExampleFromSchema,
+  createBrunoExample,
+  groupRequestsByTags,
+  groupRequestsByPath,
+  normalizeItemName,
+  getTagDescriptions,
+  toSpecString
+} from './openapi-common';
 
-const ensureUrl = (url) => {
-  // removing multiple slashes after the protocol if it exists, or after the beginning of the string otherwise
-  return url.replace(/([^:])\/{2,}/g, '$1/');
+const getContentLevelExample = (bodyContent) => {
+  if (bodyContent.example !== undefined) return bodyContent.example;
+  const firstExample = Object.values(bodyContent.examples ?? {})[0];
+  return firstExample?.value;
 };
 
-const getStatusText = (statusCode) => {
-  const statusTexts = {
-    100: 'Continue',
-    101: 'Switching Protocols',
-    102: 'Processing',
-    103: 'Early Hints',
-    200: 'OK',
-    201: 'Created',
-    202: 'Accepted',
-    203: 'Non-Authoritative Information',
-    204: 'No Content',
-    205: 'Reset Content',
-    206: 'Partial Content',
-    207: 'Multi-Status',
-    208: 'Already Reported',
-    226: 'IM Used',
-    300: 'Multiple Choice',
-    301: 'Moved Permanently',
-    302: 'Found',
-    303: 'See Other',
-    304: 'Not Modified',
-    305: 'Use Proxy',
-    306: 'unused',
-    307: 'Temporary Redirect',
-    308: 'Permanent Redirect',
-    400: 'Bad Request',
-    401: 'Unauthorized',
-    402: 'Payment Required',
-    403: 'Forbidden',
-    404: 'Not Found',
-    405: 'Method Not Allowed',
-    406: 'Not Acceptable',
-    407: 'Proxy Authentication Required',
-    408: 'Request Timeout',
-    409: 'Conflict',
-    410: 'Gone',
-    411: 'Length Required',
-    412: 'Precondition Failed',
-    413: 'Payload Too Large',
-    414: 'URI Too Long',
-    415: 'Unsupported Media Type',
-    416: 'Range Not Satisfiable',
-    417: 'Expectation Failed',
-    418: 'I\'m a teapot',
-    421: 'Misdirected Request',
-    422: 'Unprocessable Entity',
-    423: 'Locked',
-    424: 'Failed Dependency',
-    425: 'Too Early',
-    426: 'Upgrade Required',
-    428: 'Precondition Required',
-    429: 'Too Many Requests',
-    431: 'Request Header Fields Too Large',
-    451: 'Unavailable For Legal Reasons',
-    500: 'Internal Server Error',
-    501: 'Not Implemented',
-    502: 'Bad Gateway',
-    503: 'Service Unavailable',
-    504: 'Gateway Timeout',
-    505: 'HTTP Version Not Supported',
-    506: 'Variant Also Negotiates',
-    507: 'Insufficient Storage',
-    508: 'Loop Detected',
-    510: 'Not Extended',
-    511: 'Network Authentication Required'
-  };
-  return statusTexts[statusCode] || 'Unknown';
+// Extract a representative value from a schema property (used for request body properties)
+// Priority: prop.example > parentExample[propName] > prop.default > prop.enum[0] > ''
+const getSchemaPropertyExampleValue = (prop, propName, parentExample = {}) => {
+  if (prop.example !== undefined) return String(prop.example);
+  if (parentExample[propName] !== undefined) return String(parentExample[propName]);
+  if (prop.default !== undefined) return String(prop.default);
+  if (prop.enum && prop.enum.length > 0) return String(prop.enum[0]);
+  return '';
 };
 
-const getBodyTypeFromContentType = (contentType) => {
-  if (contentType?.includes('application/json')) {
-    return 'json';
-  } else if (contentType?.includes('application/xml') || contentType?.includes('text/xml')) {
-    return 'xml';
-  } else if (contentType?.includes('text/html')) {
-    return 'html';
-  }
-  return 'text';
-};
-
-const buildEmptyJsonBody = (bodySchema, visited = new Map()) => {
-  // Check for circular references
-  if (visited.has(bodySchema)) {
-    return {};
+const serializeParamValue = (value) => {
+  if (value === null || value === undefined) {
+    return '';
   }
 
-  // Add this schema to visited map
-  visited.set(bodySchema, true);
+  if (typeof value !== 'object') {
+    return String(value);
+  }
 
-  let _jsonBody = {};
-  each(bodySchema.properties || {}, (prop, name) => {
-    if (prop.type === 'object') {
-      _jsonBody[name] = buildEmptyJsonBody(prop, visited);
-    } else if (prop.type === 'array') {
-      if (prop.items && prop.items.type === 'object') {
-        _jsonBody[name] = [buildEmptyJsonBody(prop.items, visited)];
-      } else {
-        _jsonBody[name] = [];
-      }
-    } else if (prop.type === 'integer') {
-      _jsonBody[name] = 0;
-    } else if (prop.type === 'boolean') {
-      _jsonBody[name] = false;
+  try {
+    return JSON.stringify(value);
+  } catch (err) {
+    return String(value);
+  }
+};
+
+const queryMemberDelimiter = (style) => {
+  if (style === 'pipeDelimited') return '|';
+  if (style === 'spaceDelimited') return ' ';
+  return ',';
+};
+
+const paramEntriesFromValue = (val, param) => {
+  const isQueryParam = param.in === 'query' || param.in === 'querystring';
+  const usesFormStyle = isQueryParam && (param.style === undefined || param.style === 'form');
+  const explode = typeof param.explode === 'boolean' ? param.explode : usesFormStyle;
+  const delimiter = isQueryParam ? queryMemberDelimiter(param.style) : ',';
+
+  if (Array.isArray(val)) {
+    if (!val.length) {
+      return null;
+    }
+
+    const members = val.map(serializeParamValue);
+
+    return usesFormStyle && explode
+      ? members.map((value) => ({ value, enabled: true }))
+      : [{ value: members.join(delimiter), enabled: true }];
+  }
+
+  if (val !== null && typeof val === 'object') {
+    const pairs = Object.entries(val);
+    if (!pairs.length) {
+      return null;
+    }
+
+    if (usesFormStyle && explode) {
+      return pairs.map(([key, item]) => ({ name: key, value: serializeParamValue(item), enabled: true }));
+    }
+
+    const flattened = explode
+      ? pairs.map(([key, item]) => `${key}=${serializeParamValue(item)}`)
+      : pairs.flatMap(([key, item]) => [key, serializeParamValue(item)]);
+
+    return [{ value: flattened.join(delimiter), enabled: true }];
+  }
+
+  const value = serializeParamValue(val);
+
+  return value === '' ? null : [{ value, enabled: true }];
+};
+
+const namedExampleValue = (example) => {
+  if (!example || typeof example !== 'object') {
+    return undefined;
+  }
+
+  return example.dataValue !== undefined ? example.dataValue : example.value;
+};
+
+const declaredParamValues = (param) => {
+  const schema = param.schema || {};
+  const namedExampleValues = Object.values(param.examples || {}).map(namedExampleValue);
+
+  return [
+    param.example,
+    ...namedExampleValues,
+    schema.default,
+    schema.example,
+    Array.isArray(schema.examples) ? schema.examples[0] : undefined
+  ];
+};
+
+const entriesFromDeclaredValues = (param) => {
+  for (const value of declaredParamValues(param)) {
+    if (value === undefined) {
+      continue;
+    }
+
+    const entries = paramEntriesFromValue(value, param);
+    if (entries) {
+      return entries;
+    }
+  }
+
+  return null;
+};
+
+/**
+ * @param {Object} param - The OpenAPI parameter object
+ * @param {*} [fallbackValue] - Value to use once every source the spec declares has come up empty
+ * @returns {Array} - Entries of `{ value, enabled }`, plus `name` where a member overrides it
+ */
+const getParameterEntries = (param, fallbackValue) => {
+  const schema = param.schema || {};
+  const entries = [];
+
+  // Handle enum parameters - create entry for each enum value
+  if (schema.enum && Array.isArray(schema.enum) && schema.enum.length > 0) {
+    const defaultValue = schema.default !== undefined ? String(schema.default) : null;
+
+    schema.enum.forEach((enumValue) => {
+      const valueStr = String(enumValue);
+      // Enable only if it matches the default value, or if it's the first value and required
+      const isDefault = defaultValue !== null && valueStr === defaultValue;
+      const enabled = isDefault || (defaultValue === null && schema.enum.indexOf(enumValue) === 0 && !!param.required);
+
+      entries.push({
+        value: valueStr,
+        enabled: enabled
+      });
+    });
+
+    return entries;
+  }
+
+  // Handle array type with items schema that has enum
+  if (schema.type === 'array' && schema.items && schema.items.enum && Array.isArray(schema.items.enum) && schema.items.enum.length > 0) {
+    const defaultValue = schema.items.default !== undefined ? String(schema.items.default) : null;
+
+    const declaredEntries = entriesFromDeclaredValues(param);
+    if (declaredEntries) {
+      return declaredEntries;
+    }
+
+    // Otherwise, create entries for each enum value in items
+    schema.items.enum.forEach((enumValue) => {
+      const valueStr = String(enumValue);
+      const isDefault = defaultValue !== null && valueStr === defaultValue;
+      const enabled = isDefault || (defaultValue === null && schema.items.enum.indexOf(enumValue) === 0 && !!param.required);
+
+      entries.push({
+        value: valueStr,
+        enabled: enabled
+      });
+    });
+
+    return entries;
+  }
+
+  const declaredEntries = entriesFromDeclaredValues(param);
+  if (declaredEntries) {
+    return declaredEntries;
+  }
+
+  let enabled = param.required || declaredParamValues(param).some((value) => value !== undefined);
+
+  if (fallbackValue !== undefined) {
+    const fallbackEntries = paramEntriesFromValue(fallbackValue, param);
+    if (fallbackEntries) {
+      return fallbackEntries;
+    }
+  }
+
+  if (schema.nullable === true && !param.required) {
+    enabled = false;
+  } else if (param.allowEmptyValue === true && !param.required) {
+    enabled = false;
+  }
+
+  if (schema.type === 'array' && schema.items) {
+    let value;
+    if (schema.items.example !== undefined) {
+      value = String(schema.items.example);
+    } else if (schema.items.enum && schema.items.enum.length > 0) {
+      value = String(schema.items.enum[0]);
+    } else if (schema.items.default !== undefined) {
+      value = String(schema.items.default);
     } else {
-      _jsonBody[name] = '';
+      value = '';
+    }
+    return [{ value, enabled }];
+  }
+
+  if (schema.minimum !== undefined) {
+    return [{ value: String(schema.minimum), enabled }];
+  }
+
+  return [{ value: '', enabled }];
+};
+
+const declaresValue = (schema) =>
+  schema.example !== undefined
+  || schema.default !== undefined
+  || (Array.isArray(schema.examples) && schema.examples.length > 0)
+  || (Array.isArray(schema.enum) && schema.enum.length > 0);
+
+const objectValueFromSchema = (param) => {
+  const schemaExample = param.schema.example || {};
+  const value = {};
+
+  each(param.schema.properties, (prop, propName) => {
+    const propSchema = (prop.example === undefined && schemaExample[propName] !== undefined)
+      ? { ...prop, example: schemaExample[propName] }
+      : prop;
+    const isRequired = Array.isArray(param.schema.required) && param.schema.required.includes(propName);
+    const entries = getParameterEntries({
+      ...param, example: undefined, examples: undefined, name: propName, schema: propSchema, required: isRequired
+    });
+
+    const picked = entries.find((entry) => entry.enabled) || entries[0];
+
+    if (picked && (picked.value !== '' || declaresValue(propSchema))) {
+      value[propName] = picked.value;
     }
   });
-  return _jsonBody;
+
+  return value;
 };
 
-const transformOpenapiRequestItem = (request, usedNames = new Set()) => {
+const transformOpenapiRequestItem = (request, usedNames = new Set(), options = {}) => {
   let _operationObject = request.operationObject;
 
-  let operationName = _operationObject.summary || _operationObject.operationId || _operationObject.description;
+  let operationName = _operationObject.summary || _operationObject.operationId || toSpecString(_operationObject.description);
+  operationName = operationName ? normalizeItemName(operationName) : '';
   if (!operationName) {
     operationName = `${request.method} ${request.path}`;
   }
 
-  // Sanitize operation name to prevent Bruno parsing issues
-  if (operationName) {
-    // Replace line breaks and normalize whitespace
-    operationName = operationName.replace(/[\r\n\s]+/g, ' ').trim();
-  }
   if (usedNames.has(operationName)) {
     // Make name unique to prevent filename collisions
     // Try adding method info first
@@ -154,7 +283,12 @@ const transformOpenapiRequestItem = (request, usedNames = new Set()) => {
     uid: uuid(),
     name: operationName,
     type: 'http-request',
+    settings: {
+      forwardAuthorizationHeader: false
+    },
+    tags: sanitizeTags(request.operationObject.tags || [], options),
     request: {
+      docs: toSpecString(_operationObject.description),
       url: ensureUrl(request.global.server + path),
       method: request.method.toUpperCase(),
       auth: {
@@ -181,32 +315,106 @@ const transformOpenapiRequestItem = (request, usedNames = new Set()) => {
     }
   };
 
+  // If the operation has its own servers, override baseUrl via request vars
+  // Only the first server is used; Bruno supports a single baseUrl per request
+  if (request.servers && request.servers.length > 0) {
+    const serverVarPairs = extractServerVars(request.servers[0]);
+    brunoRequestItem.request.vars = {
+      req: serverVarPairs.map((sv) => ({
+        uid: uuid(),
+        name: sv.name,
+        value: sv.value,
+        enabled: true,
+        local: false
+      })),
+      res: []
+    };
+  }
+
   each(_operationObject.parameters || [], (param) => {
-    if (param.in === 'query') {
-      brunoRequestItem.request.params.push({
-        uid: uuid(),
-        name: param.name,
-        value: '',
-        description: param.description || '',
-        enabled: param.required,
-        type: 'query'
+    const isObjectSchema = param.schema && param.schema.properties;
+    const expandsIntoOwnParams = isObjectSchema && (param.in === 'query' || param.in === 'querystring');
+
+    if (expandsIntoOwnParams) {
+      // Expand object schema properties into individual parameters
+      const schemaExample = param.schema.example || {};
+
+      each(param.schema.properties, (prop, propName) => {
+        const isRequired = Array.isArray(param.schema.required) && param.schema.required.includes(propName);
+
+        // Create a temporary parameter object for getParameterEntries
+        // Enrich property with parent example context if property lacks its own example
+        // Use child-level example only; drop parent-level example/examples to avoid
+        // object-level values leaking into scalar child parameters
+        const propSchema = (prop.example === undefined && schemaExample[propName] !== undefined)
+          ? { ...prop, example: schemaExample[propName] }
+          : prop;
+        const tempParam = { ...param, example: undefined, examples: undefined, name: propName, schema: propSchema, required: isRequired };
+        const entries = getParameterEntries(tempParam);
+
+        entries.forEach((entry) => {
+          if (param.in === 'query' || param.in === 'querystring') {
+            brunoRequestItem.request.params.push({
+              uid: uuid(),
+              name: propName,
+              value: entry.value,
+              description: prop.description || '',
+              enabled: entry.enabled,
+              type: 'query'
+            });
+          } else if (param.in === 'path') {
+            brunoRequestItem.request.params.push({
+              uid: uuid(),
+              name: propName,
+              value: entry.value,
+              description: prop.description || '',
+              enabled: entry.enabled,
+              type: 'path'
+            });
+          } else if (param.in === 'header') {
+            brunoRequestItem.request.headers.push({
+              uid: uuid(),
+              name: propName,
+              value: entry.value,
+              description: prop.description || '',
+              enabled: entry.enabled
+            });
+          }
+        });
       });
-    } else if (param.in === 'path') {
-      brunoRequestItem.request.params.push({
-        uid: uuid(),
-        name: param.name,
-        value: '',
-        description: param.description || '',
-        enabled: param.required,
-        type: 'path'
-      });
-    } else if (param.in === 'header') {
-      brunoRequestItem.request.headers.push({
-        uid: uuid(),
-        name: param.name,
-        value: '',
-        description: param.description || '',
-        enabled: param.required
+    } else {
+      const entries = isObjectSchema
+        ? getParameterEntries(param, objectValueFromSchema(param))
+        : getParameterEntries(param);
+
+      entries.forEach((entry) => {
+        if (param.in === 'query' || param.in === 'querystring') {
+          brunoRequestItem.request.params.push({
+            uid: uuid(),
+            name: entry.name || param.name,
+            value: entry.value,
+            description: param.description || '',
+            enabled: entry.enabled,
+            type: 'query'
+          });
+        } else if (param.in === 'path') {
+          brunoRequestItem.request.params.push({
+            uid: uuid(),
+            name: entry.name || param.name,
+            value: entry.value,
+            description: param.description || '',
+            enabled: entry.enabled,
+            type: 'path'
+          });
+        } else if (param.in === 'header') {
+          brunoRequestItem.request.headers.push({
+            uid: uuid(),
+            name: entry.name || param.name,
+            value: entry.value,
+            description: param.description || '',
+            enabled: entry.enabled
+          });
+        }
       });
     }
   });
@@ -214,7 +422,6 @@ const transformOpenapiRequestItem = (request, usedNames = new Set()) => {
   // Handle explicit no-auth case where security: [] on the operation
   if (Array.isArray(_operationObject.security) && _operationObject.security.length === 0) {
     brunoRequestItem.request.auth.mode = 'inherit';
-    return brunoRequestItem;
   }
 
   let auth = null;
@@ -321,52 +528,26 @@ const transformOpenapiRequestItem = (request, usedNames = new Set()) => {
 
   // TODO: handle allOf/anyOf/oneOf
   if (_operationObject.requestBody) {
-    let content = get(_operationObject, 'requestBody.content', {});
-    let mimeType = Object.keys(content)[0];
-    let body = content[mimeType] || {};
-    let bodySchema = body.schema;
-    if (mimeType === 'application/json') {
-      brunoRequestItem.request.body.mode = 'json';
-      if (bodySchema && bodySchema.type === 'object') {
-        let _jsonBody = buildEmptyJsonBody(bodySchema);
-        brunoRequestItem.request.body.json = JSON.stringify(_jsonBody, null, 2);
+    const content = get(_operationObject, 'requestBody.content', {});
+    const mimeType = Object.keys(content)[0];
+    const bodyContent = content[mimeType] || {};
+    let bodySchema = bodyContent.schema;
+
+    if (bodySchema?.example === undefined) {
+      const contentExample = getContentLevelExample(bodyContent);
+      if (contentExample !== undefined) {
+        bodySchema = { ...bodySchema, example: contentExample };
       }
-      if (bodySchema && bodySchema.type === 'array') {
-        brunoRequestItem.request.body.json = JSON.stringify([buildEmptyJsonBody(bodySchema.items)], null, 2);
-      }
-    } else if (mimeType === 'application/x-www-form-urlencoded') {
-      brunoRequestItem.request.body.mode = 'formUrlEncoded';
-      if (bodySchema && bodySchema.type === 'object') {
-        each(bodySchema.properties || {}, (prop, name) => {
-          brunoRequestItem.request.body.formUrlEncoded.push({
-            uid: uuid(),
-            name: name,
-            value: '',
-            description: prop.description || '',
-            enabled: true
-          });
-        });
-      }
-    } else if (mimeType === 'multipart/form-data') {
-      brunoRequestItem.request.body.mode = 'multipartForm';
-      if (bodySchema && bodySchema.type === 'object') {
-        each(bodySchema.properties || {}, (prop, name) => {
-          brunoRequestItem.request.body.multipartForm.push({
-            uid: uuid(),
-            type: 'text',
-            name: name,
-            value: '',
-            description: prop.description || '',
-            enabled: true
-          });
-        });
-      }
-    } else if (mimeType === 'text/plain') {
-      brunoRequestItem.request.body.mode = 'text';
-      brunoRequestItem.request.body.text = '';
-    } else if (mimeType === 'text/xml') {
-      brunoRequestItem.request.body.mode = 'xml';
-      brunoRequestItem.request.body.xml = '';
+    }
+
+    // Normalize: lowercase (object keys may vary in case)
+    const normalizedMimeType = typeof mimeType === 'string' ? mimeType.toLowerCase() : '';
+
+    // Find matching handler for this content type
+    const handler = BODY_TYPE_HANDLERS.find((h) => h.match(normalizedMimeType));
+    if (handler) {
+      brunoRequestItem.request.body.mode = handler.mode;
+      handler.handle(brunoRequestItem.request.body, bodySchema);
     }
   }
 
@@ -391,55 +572,181 @@ const transformOpenapiRequestItem = (request, usedNames = new Set()) => {
   }
 
   // Handle OpenAPI examples from responses and request body
-  if (_operationObject.responses || _operationObject.requestBody) {
+  if (_operationObject.responses) {
     const examples = [];
+
+    // Extract request body examples if they exist
+    // Unified structure: all request body data is stored as examples with contentType
+    const requestBodyExamples = [];
+
+    /**
+     * Helper function to create examples with appropriate request body handling
+     * @param {Object} params - Parameters object
+     * @param {*} params.responseExampleValue - The response example value
+     * @param {string} params.exampleName - Name of the example
+     * @param {string} params.exampleDescription - Description of the example
+     * @param {number} params.statusCode - HTTP status code
+     * @param {string} params.responseContentType - Response content type
+     * @param {string} [params.responseExampleKey] - Optional response example key for matching
+     */
+    const createExamplesWithRequestBody = ({ responseExampleValue, exampleName, exampleDescription, statusCode, responseContentType, responseExampleKey = null }) => {
+      const requestBodyExamplesWithKeys = requestBodyExamples.filter((rb) => rb.key !== null);
+      const requestBodyExamplesWithoutKeys = requestBodyExamples.filter((rb) => rb.key === null);
+
+      // Check if there's a matching request body example by key
+      const matchingRequestBodyExample = responseExampleKey
+        ? requestBodyExamplesWithKeys.find((rb) => rb.key === responseExampleKey)
+        : null;
+
+      if (matchingRequestBodyExample) {
+        // Use the matching request body example
+        examples.push(createBrunoExample({
+          brunoRequestItem,
+          exampleValue: responseExampleValue,
+          exampleName,
+          exampleDescription,
+          statusCode,
+          contentType: responseContentType,
+          requestBodySchema: matchingRequestBodyExample.schema,
+          requestBodyContentType: matchingRequestBodyExample.contentType
+        }));
+      } else if (requestBodyExamplesWithKeys.length > 0) {
+        // No match found, create all combinations with request body examples that have keys
+        requestBodyExamplesWithKeys.forEach((rbExample) => {
+          const combinedExampleName = `${exampleName} (${rbExample.summary || rbExample.key})`;
+          const combinedExampleDescription = exampleDescription || rbExample.description || '';
+          examples.push(createBrunoExample({
+            brunoRequestItem,
+            exampleValue: responseExampleValue,
+            exampleName: combinedExampleName,
+            exampleDescription: combinedExampleDescription,
+            statusCode,
+            contentType: responseContentType,
+            requestBodySchema: rbExample.schema,
+            requestBodyContentType: rbExample.contentType
+          }));
+        });
+      } else if (requestBodyExamplesWithoutKeys.length > 0) {
+        // Single example or schema - use the first one for all response examples
+        const rbExample = requestBodyExamplesWithoutKeys[0];
+        examples.push(createBrunoExample({
+          brunoRequestItem,
+          exampleValue: responseExampleValue,
+          exampleName,
+          exampleDescription,
+          statusCode,
+          contentType: responseContentType,
+          requestBodySchema: rbExample.schema,
+          requestBodyContentType: rbExample.contentType
+        }));
+      } else {
+        // No request body, create example without request body
+        examples.push(createBrunoExample({
+          brunoRequestItem,
+          exampleValue: responseExampleValue,
+          exampleName,
+          exampleDescription,
+          statusCode,
+          contentType: responseContentType
+        }));
+      }
+    };
+
+    if (_operationObject.requestBody && _operationObject.requestBody.content) {
+      Object.entries(_operationObject.requestBody.content).forEach(([contentType, content]) => {
+        if (content.examples) {
+          // Multiple request body examples
+          Object.entries(content.examples).forEach(([exampleKey, example]) => {
+            const exampleValue = example.value !== undefined ? example.value : example;
+            requestBodyExamples.push({
+              key: exampleKey,
+              schema: { example: exampleValue }, // Wrap in schema format for BODY_TYPE_HANDLERS
+              summary: example.summary,
+              description: example.description,
+              contentType: contentType
+            });
+          });
+        } else if (content.example !== undefined) {
+          // Single request body example - wrap in schema-like object
+          requestBodyExamples.push({
+            key: null,
+            schema: { example: content.example }, // Wrap in schema format for BODY_TYPE_HANDLERS
+            summary: null,
+            description: null,
+            contentType: contentType
+          });
+        } else if (content.schema) {
+          // Schema-based request body - pass schema directly
+          requestBodyExamples.push({
+            key: null,
+            schema: content.schema,
+            summary: null,
+            description: null,
+            contentType: contentType
+          });
+        }
+      });
+    }
 
     // Handle response examples
     if (_operationObject.responses) {
       Object.entries(_operationObject.responses).forEach(([statusCode, response]) => {
         if (response.content) {
           Object.entries(response.content).forEach(([contentType, content]) => {
+            // Handle examples (plural) - multiple named examples
             if (content.examples) {
               Object.entries(content.examples).forEach(([exampleKey, example]) => {
                 const exampleName = example.summary || exampleKey || `${statusCode} Response`;
                 const exampleDescription = example.description || '';
+                const exampleValue = example.value !== undefined ? example.value : example;
 
-                // Create Bruno example
-                const brunoExample = {
-                  uid: uuid(),
-                  itemUid: brunoRequestItem.uid,
-                  name: exampleName,
-                  description: exampleDescription,
-                  type: 'http-request',
-                  request: {
-                    url: brunoRequestItem.request.url,
-                    method: brunoRequestItem.request.method,
-                    headers: [...brunoRequestItem.request.headers],
-                    params: [...brunoRequestItem.request.params],
-                    body: { ...brunoRequestItem.request.body }
-                  },
-                  response: {
-                    status: String(statusCode),
-                    statusText: getStatusText(statusCode),
-                    headers: [
-                      {
-                        uid: uuid(),
-                        name: 'Content-Type',
-                        value: contentType,
-                        description: '',
-                        enabled: true
-                      }
-                    ],
-                    body: {
-                      type: getBodyTypeFromContentType(contentType),
-                      content: typeof example.value === 'object' ? JSON.stringify(example.value, null, 2) : example.value
-                    }
-                  }
-                };
+                createExamplesWithRequestBody({
+                  responseExampleValue: exampleValue,
+                  exampleName,
+                  exampleDescription,
+                  statusCode,
+                  responseContentType: contentType,
+                  responseExampleKey: exampleKey
+                });
+              });
+            } else if (content.example !== undefined) {
+              // Handle example (singular) at content level
+              const exampleName = `${statusCode} Response`;
+              const exampleDescription = response.description || '';
 
-                examples.push(brunoExample);
+              createExamplesWithRequestBody({
+                responseExampleValue: content.example,
+                exampleName,
+                exampleDescription,
+                statusCode,
+                responseContentType: contentType
+              });
+            } else if (content.schema) {
+              // Handle schema - extract or generate example from schema
+              const exampleValue = getExampleFromSchema(content.schema);
+              const exampleName = `${statusCode} Response`;
+              const exampleDescription = response.description || '';
+
+              createExamplesWithRequestBody({
+                responseExampleValue: exampleValue,
+                exampleName,
+                exampleDescription,
+                statusCode,
+                responseContentType: contentType
               });
             }
+          });
+        } else {
+          // Handle responses without content (e.g., 204 No Content)
+          const exampleName = `${statusCode} Response`;
+          const exampleDescription = response.description || '';
+
+          createExamplesWithRequestBody({
+            responseExampleValue: '',
+            exampleName,
+            exampleDescription,
+            statusCode,
+            responseContentType: null
           });
         }
       });
@@ -454,6 +761,15 @@ const transformOpenapiRequestItem = (request, usedNames = new Set()) => {
   return brunoRequestItem;
 };
 
+// Helper function to validate $ref
+const isValidRef = (ref) => {
+  if (typeof ref !== 'string') {
+    return false;
+  }
+
+  return ref.startsWith('#/components/');
+};
+
 const resolveRefs = (spec, components = spec?.components, cache = new Map()) => {
   if (!spec || typeof spec !== 'object') {
     return spec;
@@ -464,10 +780,13 @@ const resolveRefs = (spec, components = spec?.components, cache = new Map()) => 
   }
 
   if (Array.isArray(spec)) {
-    return spec.map(item => resolveRefs(item, components, cache));
+    return spec.map((item) => resolveRefs(item, components, cache));
   }
 
-  if ('$ref' in spec) {
+  // Only treat as a JSON reference if it passes all validation checks
+  const isRef = isValidRef(spec.$ref);
+
+  if (isRef) {
     const refPath = spec.$ref;
 
     if (cache.has(refPath)) {
@@ -504,156 +823,52 @@ const resolveRefs = (spec, components = spec?.components, cache = new Map()) => 
   return resolved;
 };
 
-const groupRequestsByTags = (requests) => {
-  let _groups = {};
-  let ungrouped = [];
-  each(requests, (request) => {
-    let tags = request.operationObject.tags || [];
-    if (tags.length > 0) {
-      let tag = tags[0].trim(); // take first tag and trim whitespace
-
-      if (tag) {
-        if (!_groups[tag]) {
-          _groups[tag] = [];
-        }
-        _groups[tag].push(request);
-      } else {
-        ungrouped.push(request);
-      }
-    } else {
-      ungrouped.push(request);
-    }
-  });
-
-  let groups = Object.keys(_groups).map((groupName) => {
-    return {
-      name: groupName,
-      requests: _groups[groupName]
-    };
-  });
-
-  return [groups, ungrouped];
-};
-
-const groupRequestsByPath = (requests) => {
-  const pathGroups = {};
-
-  // Group requests by their path segments
-  requests.forEach((request) => {
-    // Use original path for grouping to preserve {id} format
-    const pathToUse = request.originalPath || request.path;
-    const pathSegments = pathToUse.split('/').filter((segment) => segment !== '');
-
-    if (pathSegments.length === 0) {
-      // Handle root path or paths with only parameters
-      const groupName = 'Root';
-      if (!pathGroups[groupName]) {
-        pathGroups[groupName] = {
-          name: groupName,
-          requests: [],
-          subGroups: {}
-        };
-      }
-      pathGroups[groupName].requests.push(request);
-      return;
-    }
-
-    // Use the first segment as the main group
-    let groupName = pathSegments[0];
-
-    if (!pathGroups[groupName]) {
-      pathGroups[groupName] = {
-        name: groupName,
-        requests: [],
-        subGroups: {}
-      };
-    }
-
-    // If there's only one meaningful segment, add to main group
-    if (pathSegments.length <= 1) {
-      pathGroups[groupName].requests.push(request);
-    } else {
-      // For deeper paths, create sub-groups
-      let currentGroup = pathGroups[groupName];
-      for (let i = 1; i < pathSegments.length; i++) {
-        let subGroupName = pathSegments[i];
-
-        if (!currentGroup.subGroups[subGroupName]) {
-          currentGroup.subGroups[subGroupName] = {
-            name: subGroupName,
-            requests: [],
-            subGroups: {}
-          };
-        }
-        currentGroup = currentGroup.subGroups[subGroupName];
-      }
-      currentGroup.requests.push(request);
-    }
-  });
-
-  // Convert the nested structure to Bruno folder format
-  const buildFolderStructure = (group) => {
-    // Create a new usedNames set for each folder/subfolder scope
-    const localUsedNames = new Set();
-    const items = group.requests.map((req) => transformOpenapiRequestItem(req, localUsedNames));
-
-    // Add sub-folders
-    const subFolders = [];
-    Object.values(group.subGroups).forEach((subGroup) => {
-      const subFolderItems = buildFolderStructure(subGroup);
-      if (subFolderItems.length > 0) {
-        subFolders.push({
-          uid: uuid(),
-          name: subGroup.name,
-          type: 'folder',
-          items: subFolderItems
-        });
-      }
-    });
-
-    return [...items, ...subFolders];
-  };
-
-  const folders = Object.values(pathGroups).map((group) => ({
-    uid: uuid(),
-    name: group.name,
-    type: 'folder',
-    items: buildFolderStructure(group)
-  }));
-
-  return folders;
-};
-
 const getDefaultUrl = (serverObject) => {
   let url = serverObject.url;
   if (serverObject.variables) {
     each(serverObject.variables, (variable, variableName) => {
-      let sub = variable.default || (variable.enum ? variable.enum[0] : `{{${variableName}}}`);
-      url = url.replace(`{${variableName}}`, sub);
+      let sub = variable.default !== undefined ? variable.default : (variable.enum ? variable.enum[0] : `{{${variableName}}}`);
+      url = url.replaceAll(`{${variableName}}`, sub);
     });
   }
   return url.endsWith('/') ? url.slice(0, -1) : url;
 };
 
+// Extract { name, value } pairs from an OpenAPI server object.
+// Converts {varName} to {{varName}} for template URLs and includes variable defaults.
+const extractServerVars = (server) => {
+  const vars = [];
+  if (server.variables && Object.keys(server.variables).length > 0) {
+    let baseUrlTemplate = server.url;
+    each(server.variables, (variable, variableName) => {
+      baseUrlTemplate = baseUrlTemplate.replaceAll(`{${variableName}}`, `{{${variableName}}}`);
+    });
+    baseUrlTemplate = baseUrlTemplate.endsWith('/') ? baseUrlTemplate.slice(0, -1) : baseUrlTemplate;
+    vars.push({ name: 'baseUrl', value: baseUrlTemplate });
+    each(server.variables, (variable, variableName) => {
+      let value = variable.default !== undefined ? variable.default : (variable.enum ? variable.enum[0] : '');
+      vars.push({ name: variableName, value: String(value) });
+    });
+  } else {
+    vars.push({ name: 'baseUrl', value: getDefaultUrl(server) });
+  }
+  return vars;
+};
+
 const getSecurity = (apiSpec) => {
   let defaultSchemes = apiSpec.security || [];
-
   let securitySchemes = get(apiSpec, 'components.securitySchemes', {});
-  if (Object.keys(securitySchemes) === 0) {
-    return {
-      supported: []
-    };
-  }
+
+  const hasSchemes = Object.keys(securitySchemes).length > 0;
 
   return {
-    supported: defaultSchemes.map((scheme) => {
-      var schemeName = Object.keys(scheme)[0];
-      return securitySchemes[schemeName];
-    }),
+    supported: hasSchemes
+      ? defaultSchemes
+          .map((scheme) => securitySchemes[Object.keys(scheme)[0]])
+          .filter(Boolean)
+      : [],
     schemes: securitySchemes,
-    getScheme: (schemeName) => {
-      return securitySchemes[schemeName];
-    }
+    getScheme: (schemeName) => securitySchemes[schemeName]
   };
 };
 
@@ -678,82 +893,117 @@ export const parseOpenApiCollection = (data, options = {}) => {
     items: [],
     environments: []
   };
-    try {
-      const collectionData = resolveRefs(data);
-      if (!collectionData) {
-        throw new Error('Invalid OpenAPI collection. Failed to resolve refs.');
-        return;
+  try {
+    const collectionData = resolveRefs(data);
+    if (!collectionData) {
+      throw new Error('Invalid OpenAPI collection. Failed to resolve refs.');
+      return;
+    }
+
+    // Currently parsing of openapi spec is "do your best", that is
+    // allows "invalid" openapi spec
+
+    brunoCollection.name = collectionData.info?.title?.trim() || 'Untitled Collection';
+
+    let servers = collectionData.servers || [];
+
+    // Create environments based on the servers. A server's name or description is free text
+    // that becomes the environment's filename, so it needs the same normalization as an
+    // operation name. It also needs a uniqueness guard: unlike requests, environments have
+    // no deduplication, so two servers described alike resolve to one file and the later
+    // one overwrites the earlier.
+    const usedEnvironmentNames = new Set();
+    servers.forEach((server, index) => {
+      const serverLabel = server.name || server.description;
+      let environmentName = serverLabel ? normalizeItemName(serverLabel) : '';
+      if (!environmentName) {
+        environmentName = `Environment ${index + 1}`;
       }
-
-      // Currently parsing of openapi spec is "do your best", that is
-      // allows "invalid" openapi spec
-
-      // Assumes v3 if not defined. v2 is not supported yet
-      if (collectionData.openapi && !collectionData.openapi.startsWith('3')) {
-        throw new Error('Only OpenAPI v3 is supported currently.');
-        return;
+      if (usedEnvironmentNames.has(environmentName)) {
+        let counter = 2;
+        while (usedEnvironmentNames.has(`${environmentName} (${counter})`)) {
+          counter++;
+        }
+        environmentName = `${environmentName} (${counter})`;
       }
+      usedEnvironmentNames.add(environmentName);
 
-      brunoCollection.name = collectionData.info?.title?.trim() || 'Untitled Collection';
+      const serverVars = extractServerVars(server);
+      const variables = serverVars.map((sv) => ({
+        uid: uuid(),
+        name: sv.name,
+        value: sv.value,
+        type: 'text',
+        enabled: true,
+        secret: false
+      }));
 
-      let servers = collectionData.servers || [];
-
-      // Create environments based on the servers
-      servers.forEach((server, index) => {
-        let baseUrl = getDefaultUrl(server);
-        let environmentName = server.description ? server.description : `Environment ${index + 1}`;
-
-        brunoCollection.environments.push({
-          uid: uuid(),
-          name: environmentName,
-          variables: [
-            {
-              uid: uuid(),
-              name: 'baseUrl',
-              value: baseUrl,
-              type: 'text',
-              enabled: true,
-              secret: false
-            },
-          ]
-        });
+      brunoCollection.environments.push({
+        uid: uuid(),
+        name: environmentName,
+        variables
       });
+    });
 
-      let securityConfig = getSecurity(collectionData);
+    let securityConfig = getSecurity(collectionData);
 
-      let allRequests = Object.entries(collectionData.paths)
-        .map(([path, methods]) => {
-          return Object.entries(methods)
-            .filter(([method, op]) => {
-              return ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'].includes(
-                method.toLowerCase()
-              );
-            })
-            .map(([method, operationObject]) => {
-              return {
+    // Merge path-item parameters with operation parameters.
+    // Operation parameters override path-item parameters with the same name+in combination.
+    const mergeParams = (pathParams, operationParams) => {
+      const overrides = new Set(operationParams.map((p) => `${p.name}:${p.in}`));
+      const inheritedParams = pathParams.filter((p) => !overrides.has(`${p.name}:${p.in}`));
+      return [...inheritedParams, ...operationParams];
+    };
+
+    let allRequests = Object.entries(collectionData.paths)
+      .map(([path, pathItemObject]) => {
+        // Extract path-item level parameters (per OpenAPI spec, these apply to all operations under this path)
+        const pathItemParams = pathItemObject.parameters || [];
+
+        return Object.entries(pathItemObject)
+          .filter(([method, op]) => {
+            return ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'].includes(
+              method.toLowerCase()
+            );
+          })
+          .reduce((requests, [method, operationObject]) => {
+            const variants = Array.isArray(operationObject['x-bruno-variants']) ? operationObject['x-bruno-variants'] : [];
+            const operations = [operationObject, ...variants.filter((variant) => variant && typeof variant === 'object')];
+
+            operations.forEach((operation) => {
+              const operationObjectCleaned = { ...operation };
+              delete operationObjectCleaned['x-bruno-variants'];
+              const mergedParams = mergeParams(pathItemParams, operationObjectCleaned.parameters || []);
+
+              requests.push({
                 method: method,
                 path: path.replace(/{([^}]+)}/g, ':$1'), // Replace placeholders enclosed in curly braces with colons
-              originalPath: path, // Keep original path for grouping
-                operationObject: operationObject,
+                originalPath: path, // Keep original path for grouping
+                operationObject: { ...operationObjectCleaned, parameters: mergedParams },
                 global: {
-                server: '{{baseUrl}}',
+                  server: '{{baseUrl}}',
                   security: securityConfig
-                }
-              };
+                },
+                servers: operationObjectCleaned.servers || pathItemObject.servers || null
+              });
             });
-        })
-        .reduce((acc, val) => acc.concat(val), []); // flatten
+
+            return requests;
+          }, []);
+      })
+      .reduce((acc, val) => acc.concat(val), []); // flatten
 
     // Support both tag-based and path-based grouping
     const groupingType = options.groupBy || 'tags';
 
     if (groupingType === 'path') {
-      brunoCollection.items = groupRequestsByPath(allRequests);
+      brunoCollection.items = groupRequestsByPath(allRequests, transformOpenapiRequestItem, options);
     } else {
       // Default tag-based grouping
-      let [groups, ungroupedRequests] = groupRequestsByTags(allRequests);
+      let [groups, ungroupedRequests] = groupRequestsByTags(allRequests, options);
+      const tagDescriptions = getTagDescriptions(collectionData.tags, options);
       let brunoFolders = groups.map((group) => {
-        return {
+        const folder = {
           uid: uuid(),
           name: group.name,
           type: 'folder',
@@ -772,131 +1022,143 @@ export const parseOpenApiCollection = (data, options = {}) => {
               name: group.name
             }
           },
-          items: group.requests.map((req) => transformOpenapiRequestItem(req, usedNames))
+          items: group.requests.map((req) => transformOpenapiRequestItem(req, usedNames, options))
         };
+        const docs = tagDescriptions[group.name];
+        if (docs) {
+          folder.root.docs = docs;
+        }
+        return folder;
       });
 
-      let ungroupedItems = ungroupedRequests.map((req) => transformOpenapiRequestItem(req, usedNames));
+      let ungroupedItems = ungroupedRequests.map((req) => transformOpenapiRequestItem(req, usedNames, options));
       let brunoCollectionItems = brunoFolders.concat(ungroupedItems);
       brunoCollection.items = brunoCollectionItems;
     }
 
-      // Determine collection-level authentication based on global security requirements
-      const buildCollectionAuth = (scheme) => {
-        const authTemplate = {
-          mode: 'none',
-          basic: null,
-          bearer: null,
-          digest: null,
-          apikey: null,
-          oauth2: null,
-        };
+    // Determine collection-level authentication based on global security requirements
+    const buildCollectionAuth = (scheme) => {
+      const authTemplate = {
+        mode: 'none',
+        basic: null,
+        bearer: null,
+        digest: null,
+        apikey: null,
+        oauth2: null
+      };
 
-        if (!scheme) return authTemplate;
+      if (!scheme) return authTemplate;
 
-        if (scheme.type === 'http' && scheme.scheme === 'basic') {
-          return {
-            ...authTemplate,
-            mode: 'basic',
-            basic: {
-              username: '{{username}}',
-              password: '{{password}}'
-            }
-          };
-        } else if (scheme.type === 'http' && scheme.scheme === 'bearer') {
-          return {
-            ...authTemplate,
-            mode: 'bearer',
-            bearer: {
-              token: '{{token}}'
-            }
-          };
-        } else if (scheme.type === 'http' && scheme.scheme === 'digest') {
-          return {
-            ...authTemplate,
-            mode: 'digest',
-            digest: {
-              username: '{{username}}',
-              password: '{{password}}'
-            }
-          };
-        } else if (scheme.type === 'apiKey') {
-          return {
-            ...authTemplate,
-            mode: 'apikey',
-            apikey: {
-              key: scheme.name,
-              value: '{{apiKey}}',
-              placement: scheme.in === 'query' ? 'queryparams' : 'header'
-            }
-          };
-        } else if (scheme.type === 'oauth2') {
-          let flows = scheme.flows || {};
-          let grantType = 'client_credentials';
-          if (flows.authorizationCode) {
-            grantType = 'authorization_code';
-          } else if (flows.implicit) {
-            grantType = 'implicit';
-          } else if (flows.password) {
-            grantType = 'password';
+      if (scheme.type === 'http' && scheme.scheme === 'basic') {
+        return {
+          ...authTemplate,
+          mode: 'basic',
+          basic: {
+            username: '{{username}}',
+            password: '{{password}}'
           }
-          const flowConfig = grantType === 'authorization_code' ? flows.authorizationCode || {} : grantType === 'implicit' ? flows.implicit || {} : grantType === 'password' ? flows.password || {} : flows.clientCredentials || {};
-
-          return {
-            ...authTemplate,
-            mode: 'oauth2',
-            oauth2: {
-              grantType,
-              authorizationUrl: flowConfig.authorizationUrl || '{{oauth_authorize_url}}',
-              accessTokenUrl: flowConfig.tokenUrl || '{{oauth_token_url}}',
-              refreshTokenUrl: flowConfig.refreshUrl || '{{oauth_refresh_url}}',
-              callbackUrl: '{{oauth_callback_url}}',
-              clientId: '{{oauth_client_id}}',
-              clientSecret: '{{oauth_client_secret}}',
-              scope: Array.isArray(flowConfig.scopes) ? flowConfig.scopes.join(' ') : Object.keys(flowConfig.scopes || {}).join(' '),
-              state: '{{oauth_state}}',
-              credentialsPlacement: 'header',
-              tokenPlacement: 'header',
-              tokenHeaderPrefix: 'Bearer',
-              autoFetchToken: false,
-              autoRefreshToken: true
-            }
-          };
+        };
+      } else if (scheme.type === 'http' && scheme.scheme === 'bearer') {
+        return {
+          ...authTemplate,
+          mode: 'bearer',
+          bearer: {
+            token: '{{token}}'
+          }
+        };
+      } else if (scheme.type === 'http' && scheme.scheme === 'digest') {
+        return {
+          ...authTemplate,
+          mode: 'digest',
+          digest: {
+            username: '{{username}}',
+            password: '{{password}}'
+          }
+        };
+      } else if (scheme.type === 'apiKey') {
+        return {
+          ...authTemplate,
+          mode: 'apikey',
+          apikey: {
+            key: scheme.name,
+            value: '{{apiKey}}',
+            placement: scheme.in === 'query' ? 'queryparams' : 'header'
+          }
+        };
+      } else if (scheme.type === 'oauth2') {
+        let flows = scheme.flows || {};
+        let grantType = 'client_credentials';
+        if (flows.authorizationCode) {
+          grantType = 'authorization_code';
+        } else if (flows.implicit) {
+          grantType = 'implicit';
+        } else if (flows.password) {
+          grantType = 'password';
         }
-        return authTemplate;
-      };
+        const flowConfig = grantType === 'authorization_code' ? flows.authorizationCode || {} : grantType === 'implicit' ? flows.implicit || {} : grantType === 'password' ? flows.password || {} : flows.clientCredentials || {};
 
-      let collectionAuth = buildCollectionAuth(securityConfig.supported[0]);
-
-      brunoCollection.root = {
-        request: {
-          auth: collectionAuth,
-        },
-        meta: {
-          name: brunoCollection.name
-        }
-      };
-
-      return brunoCollection;
-    } catch (err) {
-      if (!(err instanceof Error)) {
-        throw new Error('Unknown error');
+        return {
+          ...authTemplate,
+          mode: 'oauth2',
+          oauth2: {
+            grantType,
+            authorizationUrl: flowConfig.authorizationUrl || '{{oauth_authorize_url}}',
+            accessTokenUrl: flowConfig.tokenUrl || '{{oauth_token_url}}',
+            refreshTokenUrl: flowConfig.refreshUrl || '{{oauth_refresh_url}}',
+            callbackUrl: '{{oauth_callback_url}}',
+            clientId: '{{oauth_client_id}}',
+            clientSecret: '{{oauth_client_secret}}',
+            scope: Array.isArray(flowConfig.scopes) ? flowConfig.scopes.join(' ') : Object.keys(flowConfig.scopes || {}).join(' '),
+            state: '{{oauth_state}}',
+            credentialsPlacement: 'header',
+            tokenPlacement: 'header',
+            tokenHeaderPrefix: 'Bearer',
+            autoFetchToken: false,
+            autoRefreshToken: true
+          }
+        };
       }
-      throw err;
+      return authTemplate;
+    };
+
+    let collectionAuth = buildCollectionAuth(securityConfig.supported[0]);
+
+    brunoCollection.root = {
+      request: {
+        auth: collectionAuth
+      },
+      meta: {
+        name: brunoCollection.name
+      },
+      docs: toSpecString(collectionData.info?.description)
+    };
+
+    return brunoCollection;
+  } catch (err) {
+    if (!(err instanceof Error)) {
+      throw new Error('Unknown error');
     }
+    throw err;
+  }
 };
 
 export const openApiToBruno = (openApiSpecification, options = {}) => {
   try {
-    if(typeof openApiSpecification !== 'object') {
+    if (typeof openApiSpecification !== 'object') {
       openApiSpecification = jsyaml.load(openApiSpecification);
+    }
+    if (openApiSpecification.swagger && String(openApiSpecification.swagger).startsWith('2')) {
+      return swagger2ToBruno(openApiSpecification, options);
     }
 
     const collection = parseOpenApiCollection(openApiSpecification, options);
+
     const transformedCollection = transformItemsInCollection(collection);
+
     const hydratedCollection = hydrateSeqInCollection(transformedCollection);
     const validatedCollection = validateSchema(hydratedCollection);
-    return validatedCollection
+
+    return validatedCollection;
   } catch (err) {
     console.error('Error converting OpenAPI to Bruno:', err);
     if (!(err instanceof Error)) {

@@ -1,6 +1,7 @@
 const { describe, it, expect } = require('@jest/globals');
 
 import { sanitizeName, validateName } from './regex';
+import { hasInvalidVariableNames, invalidVariableNamesError, INVALID_VARIABLE_NAMES_ERROR_PREFIX } from './variables';
 
 describe('regex validators', () => {
   describe('sanitize name', () => {
@@ -110,7 +111,6 @@ describe('regex validators', () => {
       expect(sanitizeName('สวัสดีชาวโลก!?@#$%^&*()')).toBe('สวัสดีชาวโลก!-@#$%^&-()');
       expect(sanitizeName('γειά σου κόσμος!?@#$%^&*()')).toBe('γειά σου κόσμος!-@#$%^&-()');
     });
-    
   });
 });
 
@@ -124,7 +124,7 @@ describe('sanitizeName and validateName', () => {
       'file/with?invalid*chars'
     ];
 
-    validNames.forEach(name => {
+    validNames.forEach((name) => {
       const sanitized = sanitizeName(name);
       expect(validateName(sanitized)).toBe(true);
     });
@@ -132,8 +132,8 @@ describe('sanitizeName and validateName', () => {
 
   it('should sanitize and then validate names with reserved device names', () => {
     const reservedNames = ['CON', 'PRN', 'AUX', 'NUL', 'COM1', 'LPT2'];
-    
-    reservedNames.forEach(name => {
+
+    reservedNames.forEach((name) => {
       const sanitized = sanitizeName(name);
       expect(validateName(sanitized)).toBe(false);
     });
@@ -143,10 +143,10 @@ describe('sanitizeName and validateName', () => {
     const invalidNames = [
       '  <>:"/\\|?*  ',
       '   ...   ',
-      '    ',
+      '    '
     ];
 
-    invalidNames.forEach(name => {
+    invalidNames.forEach((name) => {
       const sanitized = sanitizeName(name);
       expect(validateName(sanitized)).toBe(false);
     });
@@ -158,9 +158,107 @@ describe('sanitizeName and validateName', () => {
       '   COM1   '
     ];
 
-    mixedNames.forEach(name => {
+    mixedNames.forEach((name) => {
       const sanitized = sanitizeName(name);
       expect(validateName(sanitized)).toBe(false);
     });
+  });
+});
+
+describe('hasInvalidVariableNames', () => {
+  describe('valid variable names', () => {
+    it('should return false for alphanumeric names with underscores, hyphens, and dots', () => {
+      const validVariables = [
+        { name: 'valid_name', value: 'test' },
+        { name: 'valid-name', value: 'test' },
+        { name: 'valid.name', value: 'test' },
+        { name: 'validName123', value: 'test' }
+      ];
+      expect(hasInvalidVariableNames(validVariables)).toBe(false);
+    });
+
+    it('should return false for empty array (no variables to validate)', () => {
+      expect(hasInvalidVariableNames([])).toBe(false);
+    });
+  });
+
+  describe('invalid variable names', () => {
+    it('should return true for variable names with unicode letters (not in \\w)', () => {
+      const variables = [{ name: 'válid_ñame', value: 'test' }];
+      expect(hasInvalidVariableNames(variables)).toBe(true);
+    });
+
+    it('should return true for variable names containing spaces', () => {
+      const variables = [{ name: 'invalid name', value: 'test' }];
+      expect(hasInvalidVariableNames(variables)).toBe(true);
+    });
+
+    it('should return true for variable names with special characters', () => {
+      const invalidVariables = [
+        { name: 'invalid@name', value: 'test' },
+        { name: 'invalid!name', value: 'test' },
+        { name: 'invalid#name', value: 'test' },
+        { name: 'invalid$name', value: 'test' }
+      ];
+      invalidVariables.forEach((variable) => {
+        expect(hasInvalidVariableNames([variable])).toBe(true);
+      });
+    });
+
+    it('should return true if any variable in array has invalid name', () => {
+      const mixedVariables = [
+        { name: 'valid_name', value: 'test' },
+        { name: 'invalid name', value: 'test' },
+        { name: 'another_valid', value: 'test' }
+      ];
+      expect(hasInvalidVariableNames(mixedVariables)).toBe(true);
+    });
+  });
+
+  describe('empty/placeholder variable names (skipped)', () => {
+    it('should skip variables with empty names (placeholder rows in UI)', () => {
+      const variables = [
+        { name: '', value: 'test' },
+        { name: '   ', value: 'test' }
+      ];
+      expect(hasInvalidVariableNames(variables)).toBe(false);
+    });
+
+    it('should skip variables without name property', () => {
+      const variables = [
+        { value: 'test' },
+        { name: null, value: 'test' }
+      ];
+      expect(hasInvalidVariableNames(variables)).toBe(false);
+    });
+  });
+
+  describe('defensive handling of invalid inputs', () => {
+    it('should return false for null or undefined (no variables to validate)', () => {
+      expect(hasInvalidVariableNames(null)).toBe(false);
+      expect(hasInvalidVariableNames(undefined)).toBe(false);
+    });
+
+    it('should return false for non-array inputs (defensive check)', () => {
+      expect(hasInvalidVariableNames('string')).toBe(false);
+      expect(hasInvalidVariableNames(123)).toBe(false);
+      expect(hasInvalidVariableNames({})).toBe(false);
+    });
+  });
+});
+
+describe('invalidVariableNamesError', () => {
+  it('names the offending variables', () => {
+    expect(invalidVariableNamesError(['sdhjfgsbdjf@#$%^'])).toBe('Invalid variable name(s): sdhjfgsbdjf@#$%^');
+  });
+
+  it('lists several names comma-separated', () => {
+    expect(invalidVariableNamesError(['a b', 'c@d'])).toBe('Invalid variable name(s): a b, c@d');
+  });
+
+  // Callers decide a rejection is safe to show verbatim by matching this prefix, so the two must
+  // not drift apart.
+  it('starts with the prefix callers match on', () => {
+    expect(invalidVariableNamesError(['a b']).startsWith(INVALID_VARIABLE_NAMES_ERROR_PREFIX)).toBe(true);
   });
 });

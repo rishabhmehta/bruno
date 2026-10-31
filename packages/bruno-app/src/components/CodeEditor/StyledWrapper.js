@@ -1,4 +1,5 @@
 import styled from 'styled-components';
+import codemirrorTokenStyles from './tokenStyles';
 
 const StyledWrapper = styled.div`
   &.read-only {
@@ -7,15 +8,81 @@ const StyledWrapper = styled.div`
     }
   }
 
+  /* Ensure the search bar (position: absolute; top: 8px; ~66px tall with replace open)
+     never clips in a short editor that can grow freely (e.g. flex parent).
+     Fixed-height parents like SingleWSMessage handle this via onSearchBarVisibilityChange. */
+  &.search-bar-visible .editor-shell {
+    min-height: 90px;
+  }
+
+  .editor-shell {
+    flex: 1 1 0;
+    min-height: 0;
+    width: 100%;
+    border: 1px solid ${(props) => props.theme.codemirror.border};
+    border-radius: ${(props) => props.theme.border.radius.sm};
+    overflow: hidden;
+  }
+
+  .editor-container {
+    flex: 1 1 0;
+    min-height: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
   div.CodeMirror {
     background: ${(props) => props.theme.codemirror.bg};
-    border: solid 1px ${(props) => props.theme.codemirror.border};
+    border: none;
     font-family: ${(props) => (props.font ? props.font : 'default')};
     font-size: ${(props) => (props.fontSize ? `${props.fontSize}px` : 'inherit')};
     line-break: anywhere;
     flex: 1 1 0;
+    min-height: 0;
+    height: auto !important;
     display: flex;
     flex-direction: column-reverse;
+  }
+
+  .editor-container > div.CodeMirror {
+    height: 100% !important;
+  }
+
+  .CodeMirror-placeholder {
+    color: ${(props) => props.theme.codemirror.placeholder.color} !important;
+    opacity: ${(props) => props.theme.codemirror.placeholder.opacity} !important;
+  }
+
+  .CodeMirror-linenumber {
+    text-align: left !important;
+    padding-left: 3px !important;
+  }
+
+  /* Override default lint highlight background when emphasizing the gutter */
+  .CodeMirror-lint-line-error,
+  .CodeMirror-lint-line-warning {
+    background: none !important;
+  }
+
+  /* Style line numbers when there's a lint issue */
+  .CodeMirror-lint-line-error .CodeMirror-linenumber {
+    color: ${(props) => props.theme.colors.text.danger} !important;
+    text-decoration: underline;
+  }
+
+  .CodeMirror-lint-line-warning .CodeMirror-linenumber {
+    color: ${(props) => props.theme.colors.text.warning} !important;
+    text-decoration: underline;
+  }
+
+  .cm-ghost-text-ai {
+    opacity: 0.45;
+    color: ${(props) => props.theme.colors.text.muted};
+    font-style: italic;
+    pointer-events: none;
+    user-select: none;
+    white-space: pre;
   }
 
   /* Removes the glow outline around the folded json */
@@ -73,58 +140,74 @@ const StyledWrapper = styled.div`
     }
   }
 
-  .cm-s-monokai span.cm-property,
-  .cm-s-monokai span.cm-attribute {
-    color: #9cdcfe !important;
-  }
-
-  .cm-s-monokai span.cm-string {
-    color: #ce9178 !important;
-  }
-
-  .cm-s-monokai span.cm-number {
-    color: #b5cea8 !important;
-  }
-
-  .cm-s-monokai span.cm-atom {
-    color: #569cd6 !important;
-  }
-
-  .cm-variable-valid {
-    color: green;
-  }
-  .cm-variable-invalid {
-    color: red;
-  }
+  ${codemirrorTokenStyles}
 
   .CodeMirror-search-hint {
     display: inline;
   }
-
-  .cm-s-default span.cm-property {
-    color: #1f61a0 !important;
-  }
-
-  .cm-s-default span.cm-variable {
-    color: #397d13 !important;
-  }
+  
   
   //matching bracket fix
   .CodeMirror-matchingbracket {
-    background: #5cc0b48c !important;
-    text-decoration:unset;
+    background: ${(props) => props.theme.status.success.background} !important;
+    text-decoration: unset;
   }
 
-  .cm-search-line-highlight {
-    background: ${(props) => props.theme.codemirror.searchLineHighlightCurrent};
+  .CodeMirror-nonmatchingbracket {
+    color: ${(props) => props.theme.colors.text.danger} !important;
+    background: ${(props) => props.theme.status.danger.background} !important;
+    text-decoration: unset;
   }
 
-  .cm-search-match {
-    background: rgba(255, 193, 7, 0.25);
+  @keyframes cm-error-line-flash {
+    0%, 60% {
+      background-color: ${(props) => props.theme.status.danger.background};
+    }
+    100% {
+      background-color: transparent;
+    }
   }
 
-  .cm-search-current {
-    background: rgba(255, 193, 7, 0.4);
+  .CodeMirror .cm-error-line-flash {
+    background-color: transparent;
+    animation: cm-error-line-flash 3s ease-in-out;
+  }
+
+  .CodeMirror .cm-error-line-flash-gutter {
+    color: ${(props) => props.theme.colors.text.danger} !important;
+    font-weight: 600;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .CodeMirror .cm-error-line-flash {
+      animation: none;
+      background-color: ${(props) => props.theme.status.danger.background};
+    }
+  }
+
+  .lint-error-tooltip {
+    position: fixed;
+    z-index: 10000;
+    background: ${(props) => props.theme.codemirror.bg};
+    border-radius: ${(props) => props.theme.border.radius.base};
+    padding: 8px 12px;
+    max-width: 400px;
+    box-shadow: ${(props) => props.theme.shadow.sm};
+    font-size: ${(props) => props.theme.font.size.xs};
+    line-height: 1.5;
+    pointer-events: none;
+
+    .lint-tooltip-message {
+      padding: 2px 0;
+    }
+
+    .lint-tooltip-message.error {
+      color: ${(props) => props.theme.colors.text.danger};
+    }
+
+    .lint-tooltip-message.warning {
+      color: ${(props) => props.theme.colors.text.warning};
+    }
   }
 `;
 

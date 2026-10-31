@@ -1,37 +1,69 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, forwardRef, useImperativeHandle, useRef } from 'react';
 import { useDispatch } from 'react-redux';
 import { IconBookmark } from '@tabler/icons';
 import { addResponseExample } from 'providers/ReduxStore/slices/collections';
 import { saveRequest } from 'providers/ReduxStore/slices/collections/actions';
 import { insertTaskIntoQueue } from 'providers/ReduxStore/slices/app';
-import { uuid } from 'utils/common';
+import { uuid, formatResponse } from 'utils/common';
 import toast from 'react-hot-toast';
 import CreateExampleModal from 'components/ResponseExample/CreateExampleModal';
-import { getBodyType } from 'utils/responseBodyProcessor';
+import { getExampleBodyType } from 'utils/responseBodyProcessor';
+import { detectContentTypeFromBase64 } from 'utils/response';
 import { getInitialExampleName } from 'utils/collections/index';
 import classnames from 'classnames';
 import StyledWrapper from './StyledWrapper';
+import ActionIcon from 'ui/ActionIcon/index';
 
-const ResponseBookmark = ({ item, collection, responseSize }) => {
+const getTitleText = ({ isResponseTooLarge, isStreamingResponse }) => {
+  if (isStreamingResponse) {
+    return 'Response Examples aren\'t supported in streaming responses yet.';
+  }
+
+  if (isResponseTooLarge) {
+    return 'Response size exceeds 5MB limit. Cannot save as example.';
+  }
+
+  return 'Save current response as example';
+};
+
+const ResponseBookmark = forwardRef(({ item, collection, responseSize, children }, ref) => {
   const dispatch = useDispatch();
   const [showSaveResponseExampleModal, setShowSaveResponseExampleModal] = useState(false);
   const response = item.response || {};
+  const elementRef = useRef(null);
 
   const isResponseTooLarge = responseSize >= 5 * 1024 * 1024; // 5 MB
+  const isStreamingResponse = response.stream;
+  const isDisabled = isResponseTooLarge || isStreamingResponse ? true : false;
+
+  useImperativeHandle(ref, () => ({
+    click: () => elementRef.current?.click(),
+    isDisabled
+  }), [isDisabled]);
 
   // Only show for HTTP requests
   if (item.type !== 'http-request') {
     return null;
   }
 
-  const handleSaveClick = () => {
+  const handleSaveClick = (e) => {
     if (!response || response.error) {
       toast.error('No valid response to save as example');
+      e.preventDefault();
+      e.stopPropagation();
       return;
     }
 
     if (isResponseTooLarge) {
       toast.error('Response size exceeds 5MB limit. Cannot save as example.');
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+
+    if (isDisabled) {
+      e.preventDefault();
+      e.stopPropagation();
       return;
     }
 
@@ -50,9 +82,12 @@ const ResponseBookmark = ({ item, collection, responseSize }) => {
 
     const contentTypeHeader = headersArray.find((h) => h.name?.toLowerCase() === 'content-type');
     const contentType = contentTypeHeader?.value?.toLowerCase() || '';
+    const sniffedMime = detectContentTypeFromBase64(response.dataBuffer);
+    const bodyType = getExampleBodyType(contentType, sniffedMime);
 
-    const bodyType = getBodyType(contentType);
-    const content = response.data;
+    const content = bodyType === 'binary'
+      ? response.dataBuffer
+      : formatResponse(response.data, response.dataBuffer, bodyType);
 
     const exampleData = {
       name: name,
@@ -81,7 +116,7 @@ const ResponseBookmark = ({ item, collection, responseSize }) => {
     }));
 
     // Save the request
-    await dispatch(saveRequest(item.uid, collection.uid));
+    await dispatch(saveRequest(item.uid, collection.uid, true));
 
     // Task middleware will track this and open the example in a new tab once the file is reloaded
     dispatch(insertTaskIntoQueue({
@@ -96,25 +131,32 @@ const ResponseBookmark = ({ item, collection, responseSize }) => {
     toast.success(`Example "${name}" created successfully`);
   };
 
+  const disabledMessage = getTitleText({
+    isResponseTooLarge,
+    isStreamingResponse
+  });
+
   return (
     <>
-      <StyledWrapper className="ml-2 flex items-center">
-        <button
-          onClick={handleSaveClick}
-          disabled={isResponseTooLarge}
-          title={
-            isResponseTooLarge
-              ? 'Response size exceeds 5MB limit. Cannot save as example.'
-              : 'Save current response as example'
-          }
-          className={classnames('p-1', {
-            'opacity-50 cursor-not-allowed': isResponseTooLarge
-          })}
-          data-testid="response-bookmark-btn"
-        >
-          <IconBookmark size={16} strokeWidth={1.5} />
-        </button>
-      </StyledWrapper>
+      <div
+        ref={elementRef}
+        onClick={handleSaveClick}
+        title={
+          !children ? disabledMessage : (isDisabled ? disabledMessage : null)
+        }
+        className={classnames({
+          'opacity-50 cursor-not-allowed': isDisabled && !children
+        })}
+        data-testid="response-bookmark-btn"
+      >
+        {children ?? (
+          <StyledWrapper className="flex items-center">
+            <ActionIcon className="p-1" disabled={isDisabled}>
+              <IconBookmark size={16} strokeWidth={2} />
+            </ActionIcon>
+          </StyledWrapper>
+        )}
+      </div>
 
       <CreateExampleModal
         isOpen={showSaveResponseExampleModal}
@@ -125,6 +167,8 @@ const ResponseBookmark = ({ item, collection, responseSize }) => {
       />
     </>
   );
-};
+});
+
+ResponseBookmark.displayName = 'ResponseBookmark';
 
 export default ResponseBookmark;

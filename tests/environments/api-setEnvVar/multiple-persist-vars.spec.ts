@@ -10,20 +10,25 @@ test.describe.serial('bru.setEnvVar multiple persistent variables', () => {
       if (page && !page.isClosed()) {
         await page.locator('#sidebar-collection-name').click();
         await page.getByTestId('environment-selector-trigger').click();
-        await page.locator('#configure-env').click();
+        await page.waitForTimeout(200);
+        await page.locator('#configure-env').waitFor({ state: 'visible' });
+        await page.locator('#configure-env').dispatchEvent('click');
+        await page.waitForTimeout(200);
 
-        // Remove the test environment variables
+        const envTab = page.locator('.request-tab').filter({ hasText: 'Environments' });
+
         const key1Row = page.getByRole('row', { name: 'multiple-persist-vars-key1' });
         if (await key1Row.isVisible()) {
-          await key1Row.getByRole('button').click(); // Click the delete button
+          await key1Row.getByRole('button').click();
         }
 
         const key2Row = page.getByRole('row', { name: 'multiple-persist-vars-key2' });
         if (await key2Row.isVisible()) {
-          await key2Row.getByRole('button').click(); // Click the delete button
+          await key2Row.getByRole('button').click();
         }
 
-        await page.getByTestId('modal-close-button').click();
+        await envTab.hover();
+        await envTab.getByTestId('request-tab-close-icon').click({ force: true });
       }
     } catch (error) {
       // Ignore cleanup errors to avoid masking test failures
@@ -31,7 +36,7 @@ test.describe.serial('bru.setEnvVar multiple persistent variables', () => {
     }
   });
 
-  test('should persist multiple environment variables from different requests', async ({ pageWithUserData: page }) => {
+  test('should persist multiple environment variables from different requests', async ({ pageWithUserData: page, collectionFixturePath }) => {
     await test.step('Select collection', async () => {
       await page.locator('#sidebar-collection-name').click();
       // The collection name should be 'collection' based on the test setup
@@ -40,6 +45,7 @@ test.describe.serial('bru.setEnvVar multiple persistent variables', () => {
 
     await test.step('Select stage environment', async () => {
       await page.getByTestId('environment-selector-trigger').click();
+      await page.waitForTimeout(200);
       await expect(page.locator('.environment-list .dropdown-item', { hasText: 'Stage' })).toBeVisible();
       await page.locator('.environment-list .dropdown-item', { hasText: 'Stage' }).click();
       await expect(page.locator('.current-environment', { hasText: 'Stage' })).toBeVisible();
@@ -49,8 +55,15 @@ test.describe.serial('bru.setEnvVar multiple persistent variables', () => {
       // Ensure we're in the correct collection context before selecting the folder
       await expect(page.locator('#sidebar-collection-name', { hasText: 'collection' })).toBeVisible();
 
-      // Right-click on the folder to open context menu
-      await page.getByText('multiple-persist-vars-folder', { exact: true }).click({ button: 'right' });
+      // Re-hover on each poll: CSS `:hover` reveals `.menu-icon`, but the cursor
+      // move between hover() and click() can lose the reveal.
+      const folderRow = page.locator('.collection-item-name').filter({ hasText: 'multiple-persist-vars-folder' });
+      const menuIcon = folderRow.locator('.menu-icon');
+      await expect(async () => {
+        await folderRow.hover();
+        await expect(menuIcon).toBeVisible({ timeout: 1000 });
+      }).toPass({ timeout: 10000 });
+      await menuIcon.click();
 
       // Click on Run option
       await page.getByText('Run', { exact: true }).click();
@@ -67,17 +80,25 @@ test.describe.serial('bru.setEnvVar multiple persistent variables', () => {
       await expect(page.locator('#sidebar-collection-name', { hasText: 'collection' })).toBeVisible();
 
       await page.getByTestId('environment-selector-trigger').click();
-      await page.locator('#configure-env').click();
+      await page.waitForTimeout(200);
+      await page.locator('#configure-env').waitFor({ state: 'visible' });
+      await page.locator('#configure-env').dispatchEvent('click');
+      await page.waitForTimeout(200);
+
+      const envTab = page.locator('.request-tab').filter({ hasText: 'Environments' });
+      await expect(envTab).toBeVisible();
+
       await expect(page.getByRole('row', { name: 'multiple-persist-vars-key1' }).getByRole('cell').nth(1)).toBeVisible();
       await expect(page.getByRole('row', { name: 'value1' }).getByRole('cell').nth(2)).toBeVisible();
       await expect(page.getByRole('row', { name: 'multiple-persist-vars-key2' }).getByRole('cell').nth(1)).toBeVisible();
       await expect(page.getByRole('row', { name: 'value2' }).getByRole('cell').nth(2)).toBeVisible();
-      await page.getByTestId('modal-close-button').click();
+      await envTab.hover();
+      await envTab.getByTestId('request-tab-close-icon').click({ force: true });
     });
 
     await test.step('Verify variables are persisted to file', async () => {
       // Check that the variables are written to the Stage.bru file
-      const stageBruPath = path.join(__dirname, 'fixtures/collection/environments/Stage.bru');
+      const stageBruPath = path.join(collectionFixturePath!, 'environments', 'Stage.bru');
       const stageBruContent = fs.readFileSync(stageBruPath, 'utf8');
 
       // Both variables should be present in the file

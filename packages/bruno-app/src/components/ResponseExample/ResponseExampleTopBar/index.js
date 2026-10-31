@@ -1,12 +1,13 @@
 import React, { useMemo } from 'react';
 import { useDispatch } from 'react-redux';
 import IconEdit from 'components/Icons/IconEdit';
-import { IconCode, IconDeviceFloppy } from '@tabler/icons';
+import { IconCode, IconDeviceFloppy, IconPlayerPlay } from '@tabler/icons';
 import StyledWrapper from './StyledWrapper';
 import { useTheme } from 'providers/Theme';
 import TruncatedText from 'components/TruncatedText';
 import { updateResponseExampleName, updateResponseExampleDescription } from 'providers/ReduxStore/slices/collections';
 import get from 'lodash/get';
+import Button from 'ui/Button';
 
 const ResponseExampleTopBar = ({
   item,
@@ -16,7 +17,9 @@ const ResponseExampleTopBar = ({
   onEditToggle,
   onSave,
   onCancel,
-  onGenerateCode
+  onGenerateCode,
+  onTryExample,
+  isTryPending
 }) => {
   const { theme } = useTheme();
   const dispatch = useDispatch();
@@ -130,21 +133,22 @@ const ResponseExampleTopBar = ({
             </div>
 
             <div className="flex items-center gap-3 flex-shrink-0 md:w-auto w-full md:justify-end">
-              <button
-                className="secondary-btn flex items-center gap-1.5 px-4 py-2 rounded-md text-xs font-medium cursor-pointer border whitespace-nowrap"
+              <Button
+                color="secondary"
                 onClick={handleCancel}
                 data-testid="response-example-cancel-btn"
               >
                 Cancel
-              </button>
-              <button
-                className="primary-btn flex items-center gap-1.5 px-4 py-2 rounded-md text-xs font-medium cursor-pointer border whitespace-nowrap"
+              </Button>
+              <Button
+                color="primary"
+                style={{ padding: '6px 12px' }}
+                icon={<IconDeviceFloppy size={16} />}
                 onClick={handleSave}
                 data-testid="response-example-save-btn"
               >
-                <IconDeviceFloppy size={16} color={theme.examples.buttonText} />
                 Save
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -156,9 +160,9 @@ const ResponseExampleTopBar = ({
   return (
     <StyledWrapper className="p-4">
       <div className="max-w-full">
-        <div className="flex items-start justify-between gap-6 md:flex-row flex-col">
+        <div className="flex items-center justify-between gap-6 md:flex-row flex-col">
           <div className="flex-1 min-w-0">
-            <h2 className="response-example-title font-semibold mb-2 leading-tight" data-testid="response-example-title">
+            <h2 className="response-example-title font-medium leading-tight" data-testid="response-example-title">
               <span className="opacity-60">{item.name}</span>
               {' / '}
               <span>{example.name}</span>
@@ -168,7 +172,7 @@ const ResponseExampleTopBar = ({
                 text={example.description}
                 maxLines={2}
                 className="response-example-description-container"
-                textClassName="response-example-description text-sm leading-relaxed max-w-fit"
+                textClassName="response-example-description leading-relaxed max-w-fit"
                 buttonClassName="text-blue-600 hover:text-blue-800 font-medium"
                 viewMoreText="View More"
                 viewLessText="View Less"
@@ -178,22 +182,35 @@ const ResponseExampleTopBar = ({
           </div>
 
           <div className="flex items-center gap-3 flex-shrink-0 md:w-auto w-full md:justify-end">
-            <button
-              className="secondary-btn flex items-center gap-1.5 p-2 rounded-md text-xs font-medium cursor-pointer border whitespace-nowrap"
+            <Button
+              color="secondary"
+              size="sm"
+              icon={<IconCode size={16} color={theme.examples.buttonIconColor} />}
               onClick={handleGenerateCode}
               title="Generate Code"
               data-testid="response-example-generate-code-btn"
-            >
-              <IconCode size={16} color={theme.examples.buttonIconColor} />
-            </button>
-            <button
-              className="secondary-btn flex items-center gap-1.5 px-4 py-2 rounded-md text-xs font-medium cursor-pointer border whitespace-nowrap"
+            />
+            <Button
+              color="secondary"
+              size="sm"
+              icon={<IconEdit size={16} color={theme.examples.buttonIconColor} />}
               onClick={onEditToggle}
               data-testid="response-example-edit-btn"
             >
-              <IconEdit size={16} color={theme.examples.buttonIconColor} />
               Edit Example
-            </button>
+            </Button>
+            <Button
+              color="primary"
+              variant="filled"
+              size="sm"
+              icon={<IconPlayerPlay size={16} />}
+              onClick={onTryExample}
+              loading={isTryPending}
+              title="Open this example as a new request and send it"
+              data-testid="response-example-try-btn"
+            >
+              Try
+            </Button>
           </div>
         </div>
       </div>

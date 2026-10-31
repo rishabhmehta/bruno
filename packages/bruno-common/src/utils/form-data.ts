@@ -31,3 +31,40 @@ export const buildFormUrlEncodedPayload = (params: Array<{ name: string; value: 
 
   return resultParams.toString();
 };
+
+/**
+ * Determines if the given object is a FormData instance.
+ * Supports native FormData (Node 18+, browser) and the 'form-data' npm package.
+ * @param obj - Object to check.
+ * @returns True if obj is a FormData instance, false otherwise.
+ */
+export const isFormData = (obj: unknown): boolean => {
+  // Check constructor name (works for both native FormData and form-data npm package)
+  // todo: checking constructor.name can produce false positives for objects that have a constructor.name property set to 'FormData', but this is rare.
+  return obj?.constructor?.name === 'FormData';
+};
+
+/**
+ * Extracts the media type from a Content-Type header value, without parameters and lowercased.
+ * @param contentType - The Content-Type header value (e.g., "Application/JSON; charset=UTF-8")
+ * @returns The media type (e.g., "application/json"), or '' if contentType is not a string
+ */
+export const getMediaType = (contentType: unknown): string => {
+  if (typeof contentType !== 'string') {
+    return '';
+  }
+  return contentType.split(';')[0].trim().toLowerCase();
+};
+
+/**
+ * Extracts boundary parameter from a Content-Type header value.
+ * @param contentType - The Content-Type header value (e.g., "multipart/mixed; boundary=my-boundary")
+ * @returns The boundary value if found, or null if not present
+ */
+export const extractBoundaryFromContentType = (contentType: unknown): string | null => {
+  if (typeof contentType !== 'string') {
+    return null;
+  }
+  const match = contentType.match(/boundary="([^"]+)"|boundary=([^;\s]+)/i);
+  return match ? (match[1] || match[2]) : null;
+};

@@ -1,5 +1,7 @@
-import React, { useState, useRef, forwardRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { useDrag } from 'react-dnd';
+import { getEmptyImage } from 'react-dnd-html5-backend';
 import { addTab, makeTabPermanent } from 'providers/ReduxStore/slices/tabs';
 import {
   updateResponseExample,
@@ -8,36 +10,86 @@ import {
 import { saveRequest } from 'providers/ReduxStore/slices/collections/actions';
 import { insertTaskIntoQueue } from 'providers/ReduxStore/slices/app';
 import { uuid } from 'utils/common';
-import { IconDots } from '@tabler/icons';
+import { IconDots, IconEdit, IconCopy, IconTrash, IconCode } from '@tabler/icons';
 import ExampleIcon from 'components/Icons/ExampleIcon';
 import range from 'lodash/range';
 import classnames from 'classnames';
-import Dropdown from 'components/Dropdown';
+import MenuDropdown from 'ui/MenuDropdown';
 import Modal from 'components/Modal';
 import DeleteResponseExampleModal from './DeleteResponseExampleModal';
+import GenerateCodeItem from '../GenerateCodeItem';
+import toast from 'react-hot-toast';
 import StyledWrapper from './StyledWrapper';
+import { useSidebarAccordion } from 'components/Sidebar/SidebarAccordionContext';
+import useSidebarSelectionClick from 'hooks/useSidebarSelectionClick';
+import { startBlockedDragTracking } from 'utils/dragBlockedCursor';
 
-const ExampleItem = ({ example, item, collection }) => {
+const ExampleItem = ({ example, item, collection, depth, searchText, openBulkMenu, isItemMultiDragDisabled, multiDragCollections, multiDragItems }) => {
+  const { dropdownContainerRef } = useSidebarAccordion();
   const dispatch = useDispatch();
-  // Check if this example is the active tab
   const activeTabUid = useSelector((state) => state.tabs?.activeTabUid);
   const isExampleActive = activeTabUid === example.uid;
-  const [editName, setEditName] = useState(example.name);
+  const [editName, setEditName] = useState(example.name || '');
   const [showRenameModal, setShowRenameModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const dropdownTippyRef = useRef(null);
+  const [generateCodeItemModalOpen, setGenerateCodeItemModalOpen] = useState(false);
+  const exampleRef = useRef(null);
+  const menuDropdownRef = useRef(null);
 
-  // Calculate indentation: item depth + 1 for examples
-  const indents = range((item.depth || 0) + 1);
+  const selectedSidebarUids = useSelector((state) => state.collections.selectedSidebarUids);
+  const isSelected = selectedSidebarUids.includes(example.uid);
+  const isMultiSelected = isSelected && selectedSidebarUids.length > 1;
+  const handleSelectionClick = useSidebarSelectionClick({ uid: example.uid, searchText });
+
+  // In the flat/virtualized sidebar an example row is a sibling of its parent request,
+  // not a child, so we derive the parent request's multi-drag state here rather than
+  // receiving it as props from the parent (as the nested tree did on main).
+  const parentIsSelected = selectedSidebarUids.includes(item.uid);
+  const parentIsMultiSelected = parentIsSelected && selectedSidebarUids.length > 1;
+  const parentMultiDragItems = parentIsMultiSelected ? multiDragItems : null;
+  const isParentRedirectedToCollectionDrag = parentIsMultiSelected && multiDragCollections?.length > 0;
+  const isParentDragDisabled = parentIsMultiSelected && isItemMultiDragDisabled && !isParentRedirectedToCollectionDrag;
+
+  const isRedirectedToRequestDrag = isMultiSelected && selectedSidebarUids.includes(item.uid) && !isParentDragDisabled;
+
+  const [, drag, dragPreview] = useDrag({
+    type: 'collection-item',
+    item: {
+      ...item,
+      sourceCollectionUid: collection.uid,
+      wasSelected: true,
+      ...(parentMultiDragItems ? { multiSelectedItems: parentMultiDragItems } : {})
+    },
+    canDrag: isRedirectedToRequestDrag,
+    options: {
+      dropEffect: 'move'
+    }
+  });
+  drag(exampleRef);
+  dragPreview(getEmptyImage(), { captureDraggingState: true });
+
+  // Indentation comes from the flattener, which already emits example rows one level
+  // deeper than their parent request.
+  const indents = range(depth);
 
   const handleExampleClick = () => {
+    const exampleIndex = item?.examples?.findIndex((ex) => ex.uid === example.uid);
+
     dispatch(addTab({
-      uid: example.uid, // Use example.uid as the tab uid
-      exampleUid: example.uid,
+      uid: example.uid,
       collectionUid: collection.uid,
       type: 'response-example',
-      itemUid: item.uid
+      itemUid: item.uid,
+      pathname: item.pathname,
+      exampleName: example.name,
+      exampleIndex: typeof exampleIndex === 'number' && exampleIndex >= 0 ? exampleIndex : undefined
     }));
+  };
+
+  const handleClick = (event) => {
+    if (handleSelectionClick(event)) return;
+    if (event && event.detail !== 1) return;
+    handleExampleClick();
   };
 
   const handleDoubleClick = () => {
@@ -47,9 +99,6 @@ const ExampleItem = ({ example, item, collection }) => {
   const handleRename = () => {
     setEditName(example.name); // Set current name when opening modal
     setShowRenameModal(true);
-    if (dropdownTippyRef.current) {
-      dropdownTippyRef.current.hide();
-    }
   };
 
   // Update editName when example changes
@@ -72,7 +121,7 @@ const ExampleItem = ({ example, item, collection }) => {
     }));
 
     // Save the request
-    await dispatch(saveRequest(item.uid, collection.uid));
+    await dispatch(saveRequest(item.uid, collection.uid, true));
 
     // Task middleware will track this and open the example in a new tab once the file is reloaded
     dispatch(insertTaskIntoQueue({
@@ -82,26 +131,22 @@ const ExampleItem = ({ example, item, collection }) => {
       itemUid: item.uid,
       exampleIndex: clonedExampleIndex
     }));
-
-    if (dropdownTippyRef.current) {
-      dropdownTippyRef.current.hide();
-    }
   };
 
   const handleDelete = () => {
     setShowDeleteModal(true);
-    if (dropdownTippyRef.current) {
-      dropdownTippyRef.current.hide();
-    }
   };
 
-  const handleRightClick = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    // Show the dropdown menu programmatically
-    if (dropdownTippyRef.current) {
-      dropdownTippyRef.current.show();
+  const handleGenerateCode = () => {
+    // Check if example has a request URL
+    if (
+      (example?.request?.url !== '' && example?.request?.url !== undefined)
+      || (item?.request?.url !== '' && item?.request?.url !== undefined)
+      || (item?.draft?.request?.url !== undefined && item?.draft?.request?.url !== '')
+    ) {
+      setGenerateCodeItemModalOpen(true);
+    } else {
+      toast.error('URL is required');
     }
   };
 
@@ -115,32 +160,78 @@ const ExampleItem = ({ example, item, collection }) => {
         name: newName
       }
     }));
-    dispatch(saveRequest(item.uid, collection.uid));
-    setShowRenameModal(false);
+    dispatch(saveRequest(item.uid, collection.uid, true))
+      .then(() => {
+        toast.success(`Example renamed to "${newName}"`);
+        setShowRenameModal(false);
+      });
   };
 
-  const onDropdownCreate = (instance) => {
-    dropdownTippyRef.current = instance;
+  // Build menu items for MenuDropdown
+  const buildMenuItems = () => {
+    return [
+      {
+        id: 'rename',
+        leftSection: IconEdit,
+        label: 'Rename',
+        onClick: handleRename,
+        testId: 'response-example-rename-option'
+      },
+      {
+        id: 'clone',
+        leftSection: IconCopy,
+        label: 'Clone',
+        onClick: handleClone,
+        testId: 'response-example-clone-option'
+      },
+      {
+        id: 'generate-code',
+        leftSection: IconCode,
+        label: 'Generate Code',
+        onClick: handleGenerateCode,
+        testId: 'response-example-generate-code-option'
+      },
+      { id: 'separator-1', type: 'divider' },
+      {
+        id: 'delete',
+        leftSection: IconTrash,
+        label: 'Delete',
+        className: 'delete-item',
+        onClick: handleDelete,
+        testId: 'response-example-delete-option'
+      }
+    ];
   };
 
-  const MenuIcon = forwardRef((props, ref) => {
-    return (
-      <div ref={ref} data-testid="response-example-menu-icon">
-        <IconDots size={22} />
-      </div>
-    );
-  });
+  // Handle right-click context menu
+  const handleContextMenu = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (isMultiSelected) {
+      openBulkMenu(e);
+      return;
+    }
+
+    menuDropdownRef.current?.show();
+  };
 
   const itemRowClassName = classnames('flex collection-item-name relative items-center', {
-    'item-focused-in-tab': isExampleActive
+    'item-focused-in-tab': isExampleActive,
+    'collection-item-selected': isSelected,
+    'drag-disabled': !isRedirectedToRequestDrag
   });
 
   return (
     <StyledWrapper
+      ref={exampleRef}
+      data-testid="sidebar-response-example-item"
+      data-selected={isSelected ? 'true' : undefined}
       className={itemRowClassName}
-      onClick={handleExampleClick}
+      onMouseDown={isMultiSelected && !isRedirectedToRequestDrag ? startBlockedDragTracking : undefined}
+      onClick={handleClick}
       onDoubleClick={handleDoubleClick}
-      onContextMenu={handleRightClick}
+      onContextMenu={handleContextMenu}
     >
       {indents && indents.length
         ? indents.map((i) => (
@@ -148,7 +239,6 @@ const ExampleItem = ({ example, item, collection }) => {
               className="indent-block"
               key={i}
               style={{ width: 16, minWidth: 16, height: '100%' }}
-              onContextMenu={handleRightClick}
             >
               &nbsp;{/* Indent */}
             </div>
@@ -157,46 +247,25 @@ const ExampleItem = ({ example, item, collection }) => {
       <div
         className="flex flex-grow items-center h-full overflow-hidden"
         style={{ paddingLeft: 8 }}
-        onContextMenu={handleRightClick}
       >
         <div style={{ width: 16, minWidth: 16 }}></div>
-        <ExampleIcon size={16} color="currentColor" className="mr-2 text-gray-400 flex-shrink-0" />
-        <span className="item-name truncate text-gray-700 dark:text-gray-300 ">{example.name}</span>
+        <ExampleIcon size={16} color="currentColor" className="example-icon mr-1 flex-shrink-0" />
+        <span className="item-name truncate">{example.name}</span>
       </div>
-      <div className="menu-icon pr-2">
-        <Dropdown onCreate={onDropdownCreate} icon={<MenuIcon />} placement="bottom-start">
-          <div
-            className="dropdown-item"
-            onClick={(e) => {
-              dropdownTippyRef.current.hide();
-              handleRename();
-            }}
-            data-testid="response-example-rename-option"
+      {!isMultiSelected && (
+        <div className="menu-icon pr-2">
+          <MenuDropdown
+            ref={menuDropdownRef}
+            items={buildMenuItems()}
+            placement="bottom-start"
+            appendTo={dropdownContainerRef?.current || document.body}
+            popperOptions={{ strategy: 'fixed' }}
+            data-testid="response-example-menu"
           >
-            Rename
-          </div>
-          <div
-            className="dropdown-item"
-            onClick={(e) => {
-              dropdownTippyRef.current.hide();
-              handleClone();
-            }}
-            data-testid="response-example-clone-option"
-          >
-            Clone
-          </div>
-          <div
-            className="dropdown-item text-red-600"
-            onClick={(e) => {
-              dropdownTippyRef.current.hide();
-              handleDelete();
-            }}
-            data-testid="response-example-delete-option"
-          >
-            Delete
-          </div>
-        </Dropdown>
-      </div>
+            <IconDots size={22} data-testid="response-example-menu-icon" />
+          </MenuDropdown>
+        </div>
+      )}
 
       {showRenameModal && (
         <Modal
@@ -209,10 +278,10 @@ const ExampleItem = ({ example, item, collection }) => {
           handleConfirm={() => handleRenameConfirm(editName)}
           confirmText="Rename"
           cancelText="Cancel"
-          confirmDisabled={!editName.trim()}
+          confirmDisabled={!editName || !editName.trim()}
         >
           <div>
-            <label htmlFor="renameExampleName" className="block font-semibold">
+            <label htmlFor="renameExampleName" className="block font-medium">
               Example Name
             </label>
             <input
@@ -236,6 +305,16 @@ const ExampleItem = ({ example, item, collection }) => {
           example={example}
           item={item}
           collection={collection}
+        />
+      )}
+
+      {generateCodeItemModalOpen && (
+        <GenerateCodeItem
+          collectionUid={collection.uid}
+          item={item}
+          onClose={() => setGenerateCodeItemModalOpen(false)}
+          isExample={true}
+          exampleUid={example.uid}
         />
       )}
     </StyledWrapper>

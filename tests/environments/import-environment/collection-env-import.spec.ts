@@ -12,29 +12,28 @@ test.describe('Collection Environment Import Tests', () => {
     const envFile = path.join(__dirname, 'fixtures', 'collection-env.json');
 
     // Import test collection
-    await page.getByRole('button', { name: 'Import Collection' }).click();
+    await page.getByTestId('collections-header-add-menu').click();
+    await page.locator('.tippy-box .dropdown-item').filter({ hasText: 'Import collection' }).click();
 
     const importModal = page.locator('[data-testid="import-collection-modal"]');
     await importModal.waitFor({ state: 'visible' });
 
     await page.setInputFiles('input[type="file"]', openApiFile);
-    await page.locator('#import-collection-loader').waitFor({ state: 'hidden' });
 
     const locationModal = page.locator('[data-testid="import-collection-location-modal"]');
     await expect(locationModal.locator('.bruno-modal-header-title')).toContainText('Import Collection');
     await expect(locationModal.getByText('Environment Test Collection')).toBeVisible();
 
+    // Select a location and import
     await page.locator('#collection-location').fill(await createTmpDir('collection-env-import-test'));
-    await page.getByRole('button', { name: 'Import', exact: true }).click();
+    await locationModal.getByRole('button', { name: 'Import' }).click();
+    await locationModal.waitFor({ state: 'hidden' });
 
     await expect(
-      page.locator('#sidebar-collection-name').filter({ hasText: 'Environment Test Collection' })
-    ).toBeVisible();
+      page.locator('#sidebar-collection-name').filter({ hasText: 'Environment Test Collection' })).toBeVisible({ timeout: 10000 });
 
     // Configure collection
     await page.locator('#sidebar-collection-name').filter({ hasText: 'Environment Test Collection' }).click();
-    await page.getByLabel('Safe Mode').check();
-    await page.getByRole('button', { name: 'Save' }).click();
 
     // Import collection environment
     await page.locator('[data-testid="environment-selector-trigger"]').click();
@@ -49,24 +48,35 @@ test.describe('Collection Environment Import Tests', () => {
     const fileChooser = await fileChooserPromise;
     await fileChooser.setFiles(envFile);
 
+    await page.getByTestId('import-environment-modal-submit-btn').click();
+
     // Wait for import to complete and environment settings modal to open
     await expect(page.locator('.current-environment')).toContainText('Test Collection Environment');
 
-    // The environment settings modal should now be visible with the imported environment
-    const envSettingsModal = page.locator('.bruno-modal').filter({ hasText: 'Environments' });
-    await expect(envSettingsModal).toBeVisible();
+    const envTab = page.locator('.request-tab').filter({ hasText: 'Environments' });
+    await expect(envTab).toBeVisible();
 
-    // Verify imported variables in Test Collection Environment settings
-    await expect(envSettingsModal.locator('input[name="0.name"]')).toHaveValue('host');
-    await expect(envSettingsModal.locator('input[name="1.name"]')).toHaveValue('userId');
-    await expect(envSettingsModal.locator('input[name="2.name"]')).toHaveValue('apiKey');
-    await expect(envSettingsModal.locator('input[name="3.name"]')).toHaveValue('postTitle');
-    await expect(envSettingsModal.locator('input[name="4.name"]')).toHaveValue('postBody');
-    await expect(envSettingsModal.locator('input[name="5.name"]')).toHaveValue('secretApiToken');
-    await expect(envSettingsModal.locator('input[name="5.secret"]')).toBeChecked();
-    await page.getByText('×').click();
+    // Environment variables table uses react-virtuoso (virtual scroll),
+    // so only visible rows are in the DOM. Verify first visible batch,
+    // then scroll to reveal the rest.
+    const envNameInputs = page.locator('input[name$=".name"]');
+    await expect(envNameInputs.nth(0)).toHaveValue('host');
+    await expect(envNameInputs.nth(1)).toHaveValue('userId');
+    await expect(envNameInputs.nth(2)).toHaveValue('apiKey');
 
-    // Test GET request with imported environment
+    // Scroll the virtualized table to reveal remaining rows
+    await page.locator('.table-container').evaluate((el) => el.scrollTop = el.scrollHeight);
+    await page.waitForTimeout(500);
+
+    await expect(page.locator('input[name$=".name"][value="postTitle"]')).toBeVisible();
+    await expect(page.locator('input[name$=".name"][value="postBody"]')).toBeVisible();
+    await expect(page.locator('input[name$=".name"][value="secretApiToken"]')).toHaveCount(0);
+    await page.getByTestId('responsive-tab-secrets').click();
+    await expect(page.getByTestId('env-var-row-secretApiToken')).toBeVisible();
+
+    await envTab.hover();
+    await envTab.getByTestId('request-tab-close-icon').click({ force: true });
+
     await page.locator('.collection-item-name').first().click();
     await expect(page.locator('#request-url .CodeMirror-line')).toContainText('{{host}}/posts/{{userId}}');
     await page.locator('[data-testid="send-arrow-icon"]').click();
@@ -83,17 +93,5 @@ test.describe('Collection Environment Import Tests', () => {
     await page.locator('[data-testid="send-arrow-icon"]').click();
     await page.locator('[data-testid="response-status-code"]').waitFor({ state: 'visible' });
     await expect(page.locator('[data-testid="response-status-code"]')).toContainText('201');
-
-    // Cleanup
-    await page.locator('#sidebar-collection-name').filter({ hasText: 'Environment Test Collection' }).click();
-    await page
-      .locator('.collection-name')
-      .filter({ has: page.locator('#sidebar-collection-name:has-text("Environment Test Collection")') })
-      .locator('.collection-actions')
-      .click();
-    // Wait for the close collection modal to be hidden
-    await page.locator('.dropdown-item').filter({ hasText: 'Close' }).click();
-    await page.locator('.dropdown-item').filter({ hasText: 'Close' }).waitFor({ state: 'detached' });
-    await page.getByRole('button', { name: 'Close' }).click();
   });
 });

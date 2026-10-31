@@ -1,5 +1,6 @@
 import { test, expect } from '../../../../../playwright';
 import path from 'path';
+import { buildCommonLocators } from '../../../../utils/page/locators';
 
 test.describe.serial('Global Environment Import Tests', () => {
   test('should import single global environment', async ({ pageWithUserData: page }) => {
@@ -23,12 +24,10 @@ test.describe.serial('Global Environment Import Tests', () => {
 
         // Delete all existing environments
         for (let i = 0; i < count; i++) {
-          await page.getByTestId('delete-environment-button').click();
-          // Confirm deletion if there's a confirmation dialog
+          await page.locator('button[title="Delete"]').first().click();
           const confirmButton = page.getByRole('button', { name: 'Delete' });
           if (await confirmButton.isVisible()) {
             await confirmButton.click();
-            await page.getByText('×').click();
           }
         }
 
@@ -53,19 +52,21 @@ test.describe.serial('Global Environment Import Tests', () => {
       await page.locator('[data-testid="import-global-environment"]').click();
       const fileChooser = await fileChooserPromise;
       await fileChooser.setFiles(singleEnvFile);
+      await page.getByTestId('import-global-environment-modal-submit-btn').click();
     });
 
     await test.step('Verify imported global environment and variables', async () => {
-      // The global environment settings modal should now be visible with the imported environment
-      const envModal = page.locator('.bruno-modal').filter({ hasText: 'Global Environments' });
-      await expect(envModal).toBeVisible();
+      const envTab = page.locator('.request-tab').filter({ hasText: 'Global Environments' });
+      await expect(envTab).toBeVisible();
 
       // Verify imported variables
-      await expect(page.getByRole('row', { name: 'host' }).getByRole('cell').nth(1)).toBeVisible();
-      await expect(page.getByRole('row', { name: 'secretToken' }).getByRole('cell').nth(1)).toBeVisible();
+      const locators = buildCommonLocators(page);
+      await expect(locators.environment.varRowValueCell('host')).toBeVisible();
+      await page.getByTestId('responsive-tab-secrets').click();
+      await expect(locators.environment.varRowValueCell('secretToken')).toBeVisible();
 
-      // Close modal
-      await page.getByText('×').click();
+      await envTab.hover();
+      await envTab.getByTestId('request-tab-close-icon').click({ force: true });
     });
   });
 
@@ -90,12 +91,10 @@ test.describe.serial('Global Environment Import Tests', () => {
 
         // Delete all existing environments
         for (let i = 0; i < count; i++) {
-          await page.getByTestId('delete-environment-button').click();
-          // Confirm deletion if there's a confirmation dialog
-          const confirmButton = page.getByRole('button', { name: 'Delete' });
+          await page.locator('button[title="Delete"]').first().click();
+          const confirmButton = page.getByText('Delete', { exact: true });
           if (await confirmButton.isVisible()) {
             await confirmButton.click();
-            await page.getByText('×').click();
           }
         }
 
@@ -119,15 +118,13 @@ test.describe.serial('Global Environment Import Tests', () => {
       await page.locator('[data-testid="import-global-environment"]').click();
       const fileChooser = await fileChooserPromise;
       await fileChooser.setFiles(multiEnvFile);
+      await page.getByTestId('import-global-environment-modal-submit-btn').click();
 
-      // The global environment settings modal should now be visible with the imported environments
-      const envModal = page.locator('.bruno-modal').filter({ hasText: 'Global Environments' });
-      await expect(envModal).toBeVisible();
+      const envTab = page.locator('.request-tab').filter({ hasText: 'Global Environments' });
+      await expect(envTab).toBeVisible();
     });
 
     await test.step('Verify both global environments are available in selector', async () => {
-      // Check that both environments are available in the selector
-      await page.getByText('×').click(); // Close environment settings modal
       await page.getByTestId('environment-selector-trigger').click();
       await page.getByTestId('env-tab-global').click();
 
@@ -145,15 +142,19 @@ test.describe.serial('Global Environment Import Tests', () => {
       await page.getByTestId('environment-selector-trigger').click();
       await page.getByTestId('env-tab-global').click();
       await page.getByText('Configure', { exact: true }).click();
-      const envModal = page.locator('.bruno-modal').filter({ hasText: 'Global Environments' });
-      await expect(envModal).toBeVisible();
+      const envTab = page.locator('.request-tab').filter({ hasText: 'Global Environments' });
+      await expect(envTab).toBeVisible();
 
       // Verify imported variables
-      await expect(page.getByRole('row', { name: 'host' }).getByRole('cell').nth(1)).toBeVisible();
-      await expect(page.getByRole('row', { name: 'secretToken' }).getByRole('cell').nth(1)).toBeVisible();
+      const locators = buildCommonLocators(page);
+      await expect(locators.environment.varRowValueCell('host')).toBeVisible();
 
-      // Close modal
-      await page.getByText('×').click();
+      // secretToken was imported as a secret, so it lives on the Secrets tab, not Variables.
+      await page.getByTestId('responsive-tab-secrets').click();
+      await expect(locators.environment.varRowValueCell('secretToken')).toBeVisible();
+
+      await envTab.hover();
+      await envTab.getByTestId('request-tab-close-icon').click({ force: true });
     });
   });
 });

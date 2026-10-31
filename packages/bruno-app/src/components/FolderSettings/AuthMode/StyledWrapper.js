@@ -1,16 +1,26 @@
 import styled from 'styled-components';
 
 const StyledWrapper = styled.div`
-  .auth-mode-selector {
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-size: 0.8125rem;
-  }
+  flex-shrink: 0;
+  font-size: ${(props) => props.theme.font.size.base};
 
-  .auth-mode-label {
-    color: ${({ theme }) => theme.colors.text};
+  .auth-mode-selector {
+    font-size: ${(props) => props.theme.font.size.sm};
+    padding: 0.2rem 0px;
+    border-radius: 3px;
+    border: solid 1px ${(props) => props.theme.input.border};
+    background-color: ${(props) => props.theme.input.bg};
+
+    .auth-mode-label {
+      color: ${(props) => props.theme.primary.text};
+      padding: 0 0.5rem;
+
+    .caret {
+      color: ${(props) => props.theme.colors.text.muted};
+      fill: ${(props) => props.theme.colors.text.muted};
+    }
   }
+}
 `;
 
 export default StyledWrapper;

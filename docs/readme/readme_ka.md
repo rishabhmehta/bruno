@@ -3,7 +3,7 @@
 
 ### ბრუნო - ღია წყაროების IDE API-ების შესწავლისა და ტესტირებისათვის.
 
-[![GitHub version](https://badge.fury.io/gh/usebruno%2Fbruno.svg)](https://badge.fury.io/gh/usebruno%bruno)
+[![GitHub version](https://badge.fury.io/gh/usebruno%2Fbruno.svg)](https://badge.fury.io/gh/usebruno%2Fbruno)
 [![CI](https://github.com/usebruno/bruno/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/usebruno/bruno/actions/workflows/tests.yml)
 [![Commit Activity](https://img.shields.io/github/commit-activity/m/usebruno/bruno)](https://github.com/usebruno/bruno/pulse)
 [![X](https://img.shields.io/twitter/follow/use_bruno?style=social&logo=x)](https://twitter.com/use_bruno)
@@ -28,6 +28,7 @@
 | [العربية](./readme_ar.md)
 | [日本語](./readme_ja.md)
 | **ქართული**
+| [हिन्दी](./readme_hi.md)
 
 ბრუნო არის ახალი და ინოვაციური API კლიენტი, რომელიც მიზნად ისახავს პოსტმანისა და მსგავსი ინსტრუმენტების არსებული მდგომარეობის რევოლუციას.
 
@@ -42,12 +43,6 @@
 📢 შეიტყვეთ ჩვენი უახლესი საუბრის შესახებ India FOSS 3.0 კონფერენციაზე [აქ](https://www.youtube.com/watch?v=7bSMFpbcPiY)
 
 ![bruno](../../assets/images/landing-2.png) <br /><br />
-
-### ოქროს გამოცემა ✨
-
-მთავარი ფუნქციების უმეტესობა უფასოა და ღია წყაროა. ჩვენ ვცდილობთ ჰარმონიული ბალანსის დაცვას [ღია წყაროების პრინციპებსა და მდგრადობას შორის](https://github.com/usebruno/bruno/discussions/269)
-
-თქვენ შეგიძლიათ შეიძინოთ [ოქროს გამოცემა](https://www.usebruno.com/pricing) ერთჯერადი გადახდით **19 დოლარად**! <br/>
 
 ### ინსტალაცია
 

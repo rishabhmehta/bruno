@@ -2,11 +2,11 @@ import styled from 'styled-components';
 
 const switchSizes = {
   '2xs': { width: 32, height: 16, buttonSize: 14 },
-  xs: { width: 40, height: 20, buttonSize: 18 },
-  s: { width: 44, height: 22, buttonSize: 20 },
-  m: { width: 50, height: 24, buttonSize: 22 }, // default size
-  l: { width: 56, height: 28, buttonSize: 26 },
-  xl: { width: 64, height: 32, buttonSize: 30 },
+  'xs': { width: 40, height: 20, buttonSize: 18 },
+  's': { width: 44, height: 22, buttonSize: 20 },
+  'm': { width: 50, height: 24, buttonSize: 22 }, // default size
+  'l': { width: 56, height: 28, buttonSize: 26 },
+  'xl': { width: 64, height: 32, buttonSize: 30 },
   '2xl': { width: 72, height: 36, buttonSize: 34 }
 };
 
@@ -15,8 +15,10 @@ const getSizeValues = (size = 'm') => switchSizes[size] || switchSizes.m;
 export const Switch = styled.div`
   position: relative;
   display: inline-block;
+  flex-shrink: 0;
   width: ${(props) => getSizeValues(props.size).width}px;
   height: ${(props) => getSizeValues(props.size).height}px;
+  min-width: ${(props) => getSizeValues(props.size).width}px;
   border-radius: ${(props) => getSizeValues(props.size).height}px;
 `;
 
@@ -26,7 +28,7 @@ export const Checkbox = styled.input`
   height: 0;
 
   &:checked + label div {
-    background-color: ${(props) => props.activeColor || props.theme.textLink};
+    background-color: ${(props) => props.activeColor || props.theme.primary.solid};
   }
 
   &:checked + label div:before {
@@ -52,7 +54,7 @@ export const Label = styled.label`
     height: 100%;
     background-color: ${(props) => props.theme.colors.text.muted};
     border-radius: 24px;
-    transition: transform 0.2s;
+    transition: transform 0.1s ease-out, background-color 0.1s ease-out;
   }
 `;
 
@@ -63,7 +65,7 @@ export const Inner = styled.div`
   right: 2px;
   bottom: 2px;
   background-color: #fafafa;
-  transition: 0.4s;
+  transition: background-color 0.1s ease-out;
   border-radius: ${(props) => getSizeValues(props.size).height - 2}px;
 `;
 
@@ -74,7 +76,7 @@ export const SwitchButton = styled.div`
   left: 2px;
   bottom: 2px;
   background-color: white;
-  transition: 0.4s;
+  transition: transform 0.1s ease-out;
   border-radius: 50%;
 
   &:before {
@@ -85,7 +87,7 @@ export const SwitchButton = styled.div`
     background-color: white;
     top: 2px;
     left: 2px;
-    transition: 0.4s;
+    transition: transform 0.1s ease-out;
     border-radius: 50%;
   }
 `;

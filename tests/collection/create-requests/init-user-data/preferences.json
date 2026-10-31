@@ -1,6 +1,12 @@
 {
   "maximized": false,
   "lastOpenedCollections": [
-    "{{projectRoot}}/tests/collection/create-requests/fixtures/collection"
-  ]
+    "{{collectionPath}}"
+  ],
+  "preferences": {
+    "onboarding": {
+      "hasLaunchedBefore": true,
+      "hasSeenWelcomeModal": true
+    }
+  }
 }

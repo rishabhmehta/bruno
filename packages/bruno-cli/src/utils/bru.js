@@ -1,8 +1,9 @@
 const _ = require('lodash');
-const { 
+const {
   parseRequest: _parseRequest,
   parseCollection: _parseCollection
 } = require('@usebruno/filestore');
+const { toVariablesMap } = require('@usebruno/common').utils;
 
 const collectionBruToJson = (bru) => {
   try {
@@ -24,7 +25,7 @@ const collectionBruToJson = (bru) => {
     const sequence = _.get(json, 'meta.seq');
     if (json?.meta) {
       transformedJson.meta = {
-        name: json.meta.name,
+        name: json.meta.name
       };
 
       if (sequence) {
@@ -71,12 +72,13 @@ const bruToJson = (bru) => {
     }
 
     const sequence = _.get(json, 'meta.seq');
+    const tags = _.get(json, 'meta.tags', []);
     const transformedJson = {
       type: requestType,
       name: _.get(json, 'meta.name'),
       seq: !_.isNaN(sequence) ? Number(sequence) : 1,
       settings: _.get(json, 'settings', {}),
-      tags: _.get(json, 'meta.tags', []),
+      tags: Array.isArray(tags) ? tags : [],
       examples: _.get(json, 'examples', []),
       request: {
         url: _.get(json, requestType === 'grpc-request' ? 'grpc.url' : 'http.url'),
@@ -94,11 +96,11 @@ const bruToJson = (bru) => {
 
     if (requestType === 'grpc-request') {
       const selectedMethod = _.get(json, 'grpc.method');
-      if(selectedMethod) transformedJson.request.method = selectedMethod;
+      if (selectedMethod) transformedJson.request.method = selectedMethod;
       const selectedMethodType = _.get(json, 'grpc.methodType');
-      if(selectedMethodType) transformedJson.request.methodType = selectedMethodType;
+      if (selectedMethodType) transformedJson.request.methodType = selectedMethodType;
       const protoPath = _.get(json, 'grpc.protoPath');
-      if(protoPath) transformedJson.request.protoPath = protoPath;
+      if (protoPath) transformedJson.request.protoPath = protoPath;
       transformedJson.request.auth.mode = _.get(json, 'grpc.auth', 'none');
       transformedJson.request.body = _.get(json, 'body', {
         mode: 'grpc',
@@ -127,21 +129,8 @@ const bruToJson = (bru) => {
   }
 };
 
-const getEnvVars = (environment = {}) => {
-  const variables = environment.variables;
-  if (!variables || !variables.length) {
-    return {};
-  }
-
-  const envVars = {};
-  _.each(variables, (variable) => {
-    if (variable.enabled) {
-      envVars[variable.name] = variable.value;
-    }
-  });
-
-  return envVars;
-};
+const getEnvVars = (environment = {}) =>
+  toVariablesMap([...(environment.inheritedVariables || []), ...(environment.variables || [])]);
 
 const options = {};
 const getOptions = () => {

@@ -6,6 +6,7 @@ const decomment = require('decomment');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const { mergeHeaders, mergeScripts, mergeVars, mergeAuth, getTreePathFromCollectionToItem } = require('../utils/collection');
+const { getEffectiveTags, getOwnTags, getInheritedTagsFromTreePath } = require('@usebruno/common');
 const path = require('node:path');
 const { isLargeFile } = require('../utils/filesystem');
 const { getFormattedOauth2Credentials } = require('../utils/oauth2');
@@ -14,7 +15,7 @@ const STREAMING_FILE_SIZE_THRESHOLD = 20 * 1024 * 1024; // 20MB
 
 const prepareRequest = async (item = {}, collection = {}) => {
   const request = item?.request;
-  const brunoConfig = get(collection, 'brunoConfig', {});
+  const brunoConfig = collection.draft?.brunoConfig ? get(collection, 'draft.brunoConfig', {}) : get(collection, 'brunoConfig', {});
   const collectionPath = collection?.pathname;
   const headers = {};
   let contentTypeDefined = false;
@@ -22,18 +23,21 @@ const prepareRequest = async (item = {}, collection = {}) => {
   const scriptFlow = brunoConfig?.scripts?.flow ?? 'sandwich';
   const requestTreePath = getTreePathFromCollectionToItem(collection, item);
   if (requestTreePath && requestTreePath.length > 0) {
-    mergeHeaders(collection, request, requestTreePath);
+    mergeHeaders(collection, request, requestTreePath, { includeDisabledHeaders: true });
     mergeScripts(collection, request, requestTreePath, scriptFlow);
     mergeVars(collection, request, requestTreePath);
     mergeAuth(collection, request, requestTreePath);
   }
 
+  const disabledHeaders = [];
   each(get(request, 'headers', []), (h) => {
-    if (h.enabled) {
+    if (h.enabled && h.name?.length > 0) {
       headers[h.name] = h.value;
       if (h.name.toLowerCase() === 'content-type') {
         contentTypeDefined = true;
       }
+    } else if (!h.enabled && h.name?.length > 0) {
+      disabledHeaders.push({ name: h.name, value: h.value });
     }
   });
 
@@ -41,14 +45,18 @@ const prepareRequest = async (item = {}, collection = {}) => {
     method: request.method,
     url: request.url,
     headers: headers,
+    disabledHeaders,
     name: item.name,
-    tags: item.tags || [],
+    pathname: item.pathname,
+    tags: getEffectiveTags(getOwnTags(item), getInheritedTagsFromTreePath(requestTreePath)),
     pathParams: request.params?.filter((param) => param.type === 'path'),
     settings: item.settings,
-    responseType: 'arraybuffer'
+    responseType: 'arraybuffer',
+    mode: request.body?.mode
   };
 
-  const collectionAuth = get(collection, 'root.request.auth');
+  const collectionRoot = collection?.draft?.root || collection?.root || {};
+  const collectionAuth = get(collectionRoot, 'request.auth');
   if (collectionAuth && request.auth?.mode === 'inherit') {
     if (collectionAuth.mode === 'basic') {
       axiosRequest.basicAuth = {
@@ -64,8 +72,9 @@ const prepareRequest = async (item = {}, collection = {}) => {
     if (collectionAuth.mode === 'apikey') {
       if (collectionAuth.apikey?.placement === 'header') {
         axiosRequest.headers[collectionAuth.apikey?.key] = collectionAuth.apikey?.value;
+        axiosRequest.apiKeyHeaderName = collectionAuth.apikey?.key;
       }
-      
+
       if (collectionAuth.apikey?.placement === 'queryparams') {
         if (axiosRequest.url && collectionAuth.apikey?.key) {
           try {
@@ -86,9 +95,22 @@ const prepareRequest = async (item = {}, collection = {}) => {
       };
     }
 
+    if (collectionAuth.mode === 'akamai-edgegrid') {
+      axiosRequest.edgeGridConfig = {
+        accessToken: get(collectionAuth, 'akamaiEdgegrid.accessToken'),
+        clientToken: get(collectionAuth, 'akamaiEdgegrid.clientToken'),
+        clientSecret: get(collectionAuth, 'akamaiEdgegrid.clientSecret'),
+        nonce: get(collectionAuth, 'akamaiEdgegrid.nonce'),
+        timestamp: get(collectionAuth, 'akamaiEdgegrid.timestamp'),
+        baseURL: get(collectionAuth, 'akamaiEdgegrid.baseURL'),
+        headersToSign: get(collectionAuth, 'akamaiEdgegrid.headersToSign'),
+        maxBodySize: get(collectionAuth, 'akamaiEdgegrid.maxBodySize')
+      };
+    }
+
     if (collectionAuth.mode === 'oauth2') {
       const grantType = get(collectionAuth, 'oauth2.grantType');
-      
+
       if (grantType === 'client_credentials') {
         axiosRequest.oauth2 = {
           grantType,
@@ -146,6 +168,26 @@ const prepareRequest = async (item = {}, collection = {}) => {
       };
     }
 
+    if (collectionAuth.mode === 'oauth1') {
+      axiosRequest.oauth1config = {
+        consumerKey: get(collectionAuth, 'oauth1.consumerKey'),
+        consumerSecret: get(collectionAuth, 'oauth1.consumerSecret'),
+        accessToken: get(collectionAuth, 'oauth1.accessToken'),
+        accessTokenSecret: get(collectionAuth, 'oauth1.accessTokenSecret'),
+        callbackUrl: get(collectionAuth, 'oauth1.callbackUrl'),
+        verifier: get(collectionAuth, 'oauth1.verifier'),
+        signatureMethod: get(collectionAuth, 'oauth1.signatureMethod'),
+        privateKey: get(collectionAuth, 'oauth1.privateKey'),
+        privateKeyType: get(collectionAuth, 'oauth1.privateKeyType'),
+        timestamp: get(collectionAuth, 'oauth1.timestamp'),
+        nonce: get(collectionAuth, 'oauth1.nonce'),
+        version: get(collectionAuth, 'oauth1.version'),
+        realm: get(collectionAuth, 'oauth1.realm'),
+        placement: get(collectionAuth, 'oauth1.placement'),
+        includeBodyHash: get(collectionAuth, 'oauth1.includeBodyHash')
+      };
+    }
+
     if (collectionAuth.mode === 'wsse') {
       const username = get(collectionAuth, 'wsse.username', '');
       const password = get(collectionAuth, 'wsse.password', '');
@@ -163,8 +205,6 @@ const prepareRequest = async (item = {}, collection = {}) => {
         'X-WSSE'
       ] = `UsernameToken Username="${username}", PasswordDigest="${digest}", Nonce="${nonce}", Created="${ts}"`;
     }
-
-    console.log('axiosRequest', axiosRequest);
   }
 
   if (request.auth && request.auth.mode !== 'inherit') {
@@ -191,6 +231,26 @@ const prepareRequest = async (item = {}, collection = {}) => {
         username: get(request, 'auth.ntlm.username'),
         password: get(request, 'auth.ntlm.password'),
         domain: get(request, 'auth.ntlm.domain')
+      };
+    }
+
+    if (request.auth.mode === 'oauth1') {
+      axiosRequest.oauth1config = {
+        consumerKey: get(request, 'auth.oauth1.consumerKey'),
+        consumerSecret: get(request, 'auth.oauth1.consumerSecret'),
+        accessToken: get(request, 'auth.oauth1.accessToken'),
+        accessTokenSecret: get(request, 'auth.oauth1.accessTokenSecret'),
+        callbackUrl: get(request, 'auth.oauth1.callbackUrl'),
+        verifier: get(request, 'auth.oauth1.verifier'),
+        signatureMethod: get(request, 'auth.oauth1.signatureMethod'),
+        privateKey: get(request, 'auth.oauth1.privateKey'),
+        privateKeyType: get(request, 'auth.oauth1.privateKeyType'),
+        timestamp: get(request, 'auth.oauth1.timestamp'),
+        nonce: get(request, 'auth.oauth1.nonce'),
+        version: get(request, 'auth.oauth1.version'),
+        realm: get(request, 'auth.oauth1.realm'),
+        placement: get(request, 'auth.oauth1.placement'),
+        includeBodyHash: get(request, 'auth.oauth1.includeBodyHash')
       };
     }
 
@@ -225,7 +285,7 @@ const prepareRequest = async (item = {}, collection = {}) => {
 
     if (request.auth.mode === 'oauth2') {
       const grantType = get(request, 'auth.oauth2.grantType');
-      
+
       if (grantType === 'client_credentials') {
         axiosRequest.oauth2 = {
           grantType: grantType,
@@ -264,12 +324,13 @@ const prepareRequest = async (item = {}, collection = {}) => {
         };
       }
     }
-    
+
     if (request.auth.mode === 'apikey') {
       if (request.auth.apikey?.placement === 'header') {
         axiosRequest.headers[request.auth.apikey?.key] = request.auth.apikey?.value;
+        axiosRequest.apiKeyHeaderName = request.auth.apikey?.key;
       }
-      
+
       if (request.auth.apikey?.placement === 'queryparams') {
         if (axiosRequest.url && request.auth.apikey?.key) {
           try {
@@ -282,18 +343,34 @@ const prepareRequest = async (item = {}, collection = {}) => {
         }
       }
     }
+
+    if (request.auth.mode === 'akamai-edgegrid') {
+      axiosRequest.edgeGridConfig = {
+        accessToken: get(request, 'auth.akamaiEdgegrid.accessToken'),
+        clientToken: get(request, 'auth.akamaiEdgegrid.clientToken'),
+        clientSecret: get(request, 'auth.akamaiEdgegrid.clientSecret'),
+        nonce: get(request, 'auth.akamaiEdgegrid.nonce'),
+        timestamp: get(request, 'auth.akamaiEdgegrid.timestamp'),
+        baseURL: get(request, 'auth.akamaiEdgegrid.baseURL'),
+        headersToSign: get(request, 'auth.akamaiEdgegrid.headersToSign'),
+        maxBodySize: get(request, 'auth.akamaiEdgegrid.maxBodySize')
+      };
+    }
   }
 
   request.body = request.body || {};
 
   if (request.body.mode === 'json') {
-    if (!contentTypeDefined) {
-      axiosRequest.headers['content-type'] = 'application/json';
-    }
-    try {
-      axiosRequest.data = decomment(request?.body?.json);
-    } catch (error) {
-      axiosRequest.data = request?.body?.json;
+    const jsonBody = request.body.json;
+    if (jsonBody && jsonBody.length > 0) {
+      if (!contentTypeDefined) {
+        axiosRequest.headers['content-type'] = 'application/json';
+      }
+      try {
+        axiosRequest.data = decomment(jsonBody);
+      } catch (error) {
+        axiosRequest.data = jsonBody;
+      }
     }
   }
 
@@ -359,7 +436,9 @@ const prepareRequest = async (item = {}, collection = {}) => {
   }
 
   if (request.body.mode === 'multipartForm') {
-    axiosRequest.headers['content-type'] = 'multipart/form-data';
+    if (!contentTypeDefined) {
+      axiosRequest.headers['content-type'] = 'multipart/form-data';
+    }
     const enabledParams = filter(request.body.multipartForm, (p) => p.enabled);
     axiosRequest.data = enabledParams;
   }
@@ -367,12 +446,24 @@ const prepareRequest = async (item = {}, collection = {}) => {
   if (request.body.mode === 'graphql') {
     const graphqlQuery = {
       query: get(request, 'body.graphql.query'),
-      variables: JSON.parse(decomment(get(request, 'body.graphql.variables') || '{}'))
+      // Parse variables only after interpolation (github.com/usebruno/bruno/issues/884)
+      variables: decomment(get(request, 'body.graphql.variables') || '{}')
     };
     if (!contentTypeDefined) {
       axiosRequest.headers['content-type'] = 'application/json';
     }
     axiosRequest.data = graphqlQuery;
+  }
+
+  // if the mode is 'none' then set the content-type header to null to prevent axios from adding default. #1693
+  // AWS SigV4 requires Content-Type header in canonical request for signature calculation,
+  // even with no body. Omitting it would cause authentication failures.
+  if (request.body.mode === 'none' && (!request.auth || request.auth.mode !== 'awsv4')) {
+    if (!contentTypeDefined) {
+      // Setting to null tells axios not to add a default Content-Type header
+      // Use lowercase to match what scripts use, avoiding duplicate headers
+      axiosRequest.headers['content-type'] = null;
+    }
   }
 
   if (request.script) {
@@ -381,6 +472,7 @@ const prepareRequest = async (item = {}, collection = {}) => {
 
   if (request.tests) {
     axiosRequest.tests = request.tests;
+    axiosRequest.testsMetadata = request.testsMetadata;
   }
 
   axiosRequest.vars = request.vars;
@@ -388,6 +480,10 @@ const prepareRequest = async (item = {}, collection = {}) => {
   axiosRequest.folderVariables = request.folderVariables;
   axiosRequest.requestVariables = request.requestVariables;
   axiosRequest.oauth2CredentialVariables = getFormattedOauth2Credentials();
+  axiosRequest.__explicitHeaderNames = Object.keys(axiosRequest.headers || {}).filter((name) => {
+    const value = axiosRequest.headers[name];
+    return value !== undefined && value !== null && value !== false;
+  });
 
   return axiosRequest;
 };

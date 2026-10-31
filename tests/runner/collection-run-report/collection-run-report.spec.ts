@@ -10,9 +10,7 @@ function normalizeJunitReport(xmlContent: string): string {
     // Replace hostnames with fixed value
     .replace(/hostname="[^"]*"/g, 'hostname="test-host"')
     // Replace execution times with fixed value
-    .replace(/time="[^"]*"/g, 'time="0.100"')
-    // Replace file paths with normalized path
-    .replace(/name="[^"]*\/[^"]*"/g, 'name="/test/path/collection"');
+    .replace(/time="[^"]*"/g, 'time="0.100"');
 }
 
 test.describe('Collection Run Report Tests', () => {
@@ -35,7 +33,6 @@ test.describe('Collection Run Report Tests', () => {
     // Verify report was generated
     expect(fs.existsSync(junitOutputPath)).toBe(true);
     const junitReportContent = fs.readFileSync(junitOutputPath, 'utf8');
-
     // Snapshot the normalized XML
     const normalizedJunitReport = normalizeJunitReport(junitReportContent);
     expect(normalizedJunitReport).toMatchSnapshot('cli-junit-report.xml');

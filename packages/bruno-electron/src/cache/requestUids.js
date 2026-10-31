@@ -10,6 +10,7 @@
  * lose the request's draft state if the user has made some changes
  */
 
+const path = require('node:path');
 const requestUids = new Map();
 const exampleUids = new Map();
 const { uuid } = require('../utils/common');
@@ -38,6 +39,29 @@ const deleteRequestUid = (pathname) => {
   requestUids.delete(pathname);
 };
 
+/**
+ * Purges every cached uid (request + example) that lives under a collection's
+ * root path. Called on collection removal so a later re add at the same path
+ * (same deterministic collectionUid) starts from a clean slate instead of
+ * inheriting uids tied to files that may no longer exist or mean something else.
+ */
+const clearRequestUidsForCollection = (collectionPath) => {
+  const root = path.resolve(collectionPath);
+  const prefix = root.endsWith(path.sep) ? root : root + path.sep;
+
+  for (const key of requestUids.keys()) {
+    if (key === root || key.startsWith(prefix)) {
+      requestUids.delete(key);
+    }
+  }
+
+  for (const key of exampleUids.keys()) {
+    if (key === root || key.startsWith(prefix)) {
+      exampleUids.delete(key);
+    }
+  }
+};
+
 const getExampleUid = (pathname, index) => {
   let uid = exampleUids.get(`${pathname}-${index}`);
 
@@ -49,9 +73,34 @@ const getExampleUid = (pathname, index) => {
   return uid;
 };
 
+/**
+ * Syncs the example UID cache with the current state of examples being saved.
+ * This ensures the cache stays consistent when examples are added, deleted, or reordered.
+ *
+ * @param {string} pathname - The file path of the request
+ * @param {Array} examples - The examples array being saved (each with a uid property)
+ */
+const syncExampleUidsCache = (pathname, examples = []) => {
+  // Clear all existing cache entries for this pathname
+  for (const key of exampleUids.keys()) {
+    if (key.startsWith(`${pathname}-`)) {
+      exampleUids.delete(key);
+    }
+  }
+
+  // Rebuild cache with current example UIDs at their new indices
+  examples.forEach((example, index) => {
+    if (example.uid) {
+      exampleUids.set(`${pathname}-${index}`, example.uid);
+    }
+  });
+};
+
 module.exports = {
   getRequestUid,
   moveRequestUid,
   deleteRequestUid,
-  getExampleUid
+  getExampleUid,
+  syncExampleUidsCache,
+  clearRequestUidsForCollection
 };

@@ -89,7 +89,7 @@ const evaluateJsTemplateLiteral = (templateLiteral, context) => {
     return templateLiteral.slice(1, -1);
   }
 
-  if (templateLiteral.startsWith("'") && templateLiteral.endsWith("'")) {
+  if (templateLiteral.startsWith('\'') && templateLiteral.endsWith('\'')) {
     return templateLiteral.slice(1, -1);
   }
 
@@ -128,7 +128,7 @@ const createResponseParser = (response = {}) => {
 };
 
 /**
- * Objects that are created inside vm2 execution context result in an serialization error when sent to the renderer process
+ * Objects that are created inside developer mode execution context result in an serialization error when sent to the renderer process
  * Error sending from webFrameMain:  Error: Failed to serialize arguments
  *    at s.send (node:electron/js2c/browser_init:169:631)
  *    at g.send (node:electron/js2c/browser_init:165:2156)
@@ -161,13 +161,34 @@ const cleanJson = (data) => {
   ].filter(Boolean);
   const binaryNames = typedArrays.map((d) => d.name);
 
+  const seen = new WeakSet();
+
   const replacer = (key, value) => {
-    const isBinary = typedArrays.find((d) => value instanceof d);
-    if (isBinary) {
-      return {
-        __cleanJSONType: isBinary.name,
-        __cleanJSONValue: Buffer.from(value.buffer).toJSON()
-      };
+    if (typeof value === 'object' && value !== null) {
+      if (seen.has(value)) {
+        return '[Circular Reference]';
+      }
+      seen.add(value);
+
+      // instanceof + [[Class]] cover same-realm; duck-type fallback for cross-realm/cross-context Error-like objects
+      if (value instanceof Error || Object.prototype.toString.call(value) === '[object Error]' || (typeof value.message === 'string' && typeof value.stack === 'string')) {
+        const error = {};
+        // name/message are often on prototype; ensure they're in the output
+        error.name = value.name;
+        error.message = value.message;
+        Object.getOwnPropertyNames(value).forEach((prop) => {
+          error[prop] = value[prop];
+        });
+        return error;
+      }
+
+      const isBinary = typedArrays.find((d) => value instanceof d);
+      if (isBinary) {
+        return {
+          __cleanJSONType: isBinary.name,
+          __cleanJSONValue: Buffer.from(value.buffer).toJSON()
+        };
+      }
     }
     return value;
   };
@@ -197,18 +218,18 @@ const cleanCircularJson = (data) => {
   try {
     // Handle circular references by keeping track of seen objects
     const seen = new WeakSet();
-    
+
     const replacer = (key, value) => {
       // Skip non-objects and null
       if (typeof value !== 'object' || value === null) {
         return value;
       }
-      
+
       // Detect circular reference
       if (seen.has(value)) {
         return '[Circular Reference]';
       }
-      
+
       seen.add(value);
       return value;
     };

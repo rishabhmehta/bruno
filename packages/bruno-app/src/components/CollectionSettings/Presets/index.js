@@ -1,112 +1,134 @@
 import React from 'react';
-import { useFormik } from 'formik';
 import { useDispatch } from 'react-redux';
 import StyledWrapper from './StyledWrapper';
-import toast from 'react-hot-toast';
-import { updateBrunoConfig } from 'providers/ReduxStore/slices/collections/actions';
-import cloneDeep from 'lodash/cloneDeep';
+import { updateCollectionPresets } from 'providers/ReduxStore/slices/collections';
+import { saveCollectionSettings } from 'providers/ReduxStore/slices/collections/actions';
+import { get } from 'lodash';
+import Button from 'ui/Button';
+import MenuDropdown from 'ui/MenuDropdown';
+import SegmentedControl from 'ui/SegmentedControl';
+import { IconCaretDown } from '@tabler/icons';
+import { DEFAULT_PRESET_REQUEST_TYPE } from 'utils/common/constants';
+import { requestTypeItems } from './constants';
 
 const PresetsSettings = ({ collection }) => {
   const dispatch = useDispatch();
-  const {
-    brunoConfig: { presets: presets = {} }
-  } = collection;
+  const initialPresets = { requestType: DEFAULT_PRESET_REQUEST_TYPE, requestUrl: '' };
 
-  const formik = useFormik({
-    enableReinitialize: true,
-    initialValues: {
-      requestType: presets.requestType || 'http',
-      requestUrl: presets.requestUrl || ''
-    },
-    onSubmit: (newPresets) => {
-      const brunoConfig = cloneDeep(collection.brunoConfig);
-      brunoConfig.presets = newPresets;
-      dispatch(updateBrunoConfig(brunoConfig, collection.uid));
-      toast.success('Collection presets updated');
+  // Get presets from draft.brunoConfig if it exists, otherwise from brunoConfig
+  const currentPresets = collection.draft?.brunoConfig
+    ? get(collection, 'draft.brunoConfig.presets', initialPresets)
+    : get(collection, 'brunoConfig.presets', initialPresets);
+
+  // Helper to update presets config
+  const updatePresets = (updates) => {
+    const updatedPresets = { ...currentPresets, ...updates };
+    dispatch(updateCollectionPresets({
+      collectionUid: collection.uid,
+      presets: updatedPresets
+    }));
+  };
+
+  // Default environment is part of the collection presets; like Request Type and Base URL
+  // it is written to the draft and persisted via the Save button (or autosave).
+  const environments = collection?.environments || [];
+  const defaultEnvironmentName = currentPresets.defaultEnvironment || '';
+
+  const handleDefaultEnvironmentChange = (name) => {
+    if (name) {
+      updatePresets({ defaultEnvironment: name });
+    } else {
+      // "None" — remove the default from the draft presets.
+      const { defaultEnvironment, ...rest } = currentPresets;
+      dispatch(updateCollectionPresets({ collectionUid: collection.uid, presets: rest }));
     }
-  });
+  };
+
+  const defaultEnvironmentItems = [
+    { id: '', label: 'None', onClick: () => handleDefaultEnvironmentChange('') },
+    ...environments.map((env) => ({
+      id: env.name,
+      label: env.name,
+      onClick: () => handleDefaultEnvironmentChange(env.name)
+    }))
+  ];
+
+  const handleSave = () => dispatch(saveCollectionSettings(collection.uid));
+
+  const handleRequestTypeChange = (value) => {
+    updatePresets({ requestType: value });
+  };
+
+  const handleRequestUrlChange = (e) => {
+    updatePresets({ requestUrl: e.target.value });
+  };
+
+  const requestType = currentPresets.requestType || DEFAULT_PRESET_REQUEST_TYPE;
 
   return (
     <StyledWrapper className="h-full w-full">
-      <div className="text-xs mb-4 text-muted">
-        These presets will be used as the default values for new requests in this collection.
-      </div>
-      <form className="bruno-form" onSubmit={formik.handleSubmit}>
-        <div className="mb-3 flex items-center">
-          <label className="settings-label flex  items-center" htmlFor="enabled">
-            Request Type
-          </label>
-          <div className="flex items-center">
-            <input
-              id="http"
-              className="cursor-pointer"
-              type="radio"
-              name="requestType"
-              onChange={formik.handleChange}
-              value="http"
-              checked={formik.values.requestType === 'http'}
-            />
-            <label htmlFor="http" className="ml-1 cursor-pointer select-none">
-              HTTP
-            </label>
-
-            <input
-              id="graphql"
-              className="ml-4 cursor-pointer"
-              type="radio"
-              name="requestType"
-              onChange={formik.handleChange}
-              value="graphql"
-              checked={formik.values.requestType === 'graphql'}
-            />
-            <label htmlFor="graphql" className="ml-1 cursor-pointer select-none">
-              GraphQL
-            </label>
-
-            <input
-              id="grpc"
-              className="ml-4 cursor-pointer"
-              type="radio"
-              name="requestType"
-              onChange={formik.handleChange}
-              value="grpc"
-              checked={formik.values.requestType === 'grpc'}
-            />
-            <label htmlFor="grpc" className="ml-1 cursor-pointer select-none">
-              gRPC
-            </label>
-          </div>
+      <div className="bruno-form">
+        <div className="preset-field">
+          <label className="preset-field-label">Default Request Type</label>
+          <p className="preset-field-subtitle">Selected by default for new requests.</p>
+          <SegmentedControl
+            ariaLabel="Default Request Type"
+            name="requestType"
+            value={requestType}
+            onChange={handleRequestTypeChange}
+            items={requestTypeItems}
+            size="sm"
+          />
         </div>
-        <div className="mb-3 flex items-center">
-          <label className="settings-label" htmlFor="requestUrl">
-            Base URL
-          </label>
-          <div className="flex items-center w-full">
-            <div className="flex items-center flex-grow input-container h-full">
-              <input
-                id="request-url"
-                type="text"
-                name="requestUrl"
-                placeholder="Request URL"
-                className="block textbox"
-                autoComplete="off"
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck="false"
-                onChange={formik.handleChange}
-                value={formik.values.requestUrl || ''}
-                style={{ width: '100%' }}
-              />
-            </div>
+
+        <div className="preset-field">
+          <label className="preset-field-label" htmlFor="request-url">Default Base URL</label>
+          <p className="preset-field-subtitle">Pre-fills the URL field for new requests.</p>
+          <input
+            id="request-url"
+            data-testid="presets-request-url"
+            type="text"
+            name="requestUrl"
+            placeholder="Request URL"
+            className="block textbox preset-input mousetrap"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck="false"
+            onChange={handleRequestUrlChange}
+            value={currentPresets.requestUrl || ''}
+          />
+        </div>
+
+        <div className="preset-field">
+          <label className="preset-field-label" htmlFor="default-environment">Default Environment</label>
+          <p className="preset-field-subtitle">Selected when this collection is shared and first opened.</p>
+          <div className="default-env-dropdown">
+            <MenuDropdown
+              items={defaultEnvironmentItems}
+              selectedItemId={defaultEnvironmentName}
+              data-testid="presets-default-environment"
+              placement="bottom-start"
+              sameWidth
+            >
+              <button
+                type="button"
+                id="default-environment"
+                className="default-env-trigger flex items-center justify-between cursor-pointer"
+              >
+                <span className="truncate">{defaultEnvironmentName || 'None'}</span>
+                <IconCaretDown className="caret" size={14} strokeWidth={2} />
+              </button>
+            </MenuDropdown>
           </div>
         </div>
 
         <div className="mt-6">
-          <button type="submit" className="submit btn btn-sm btn-secondary">
+          <Button type="button" size="sm" data-testid="presets-save-btn" onClick={handleSave}>
             Save
-          </button>
+          </Button>
         </div>
-      </form>
+      </div>
     </StyledWrapper>
   );
 };

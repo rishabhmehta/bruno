@@ -7,13 +7,12 @@ const StyledWrapper = styled.div`
   border-top: 1px solid ${(props) => props.theme.console.border};
   display: flex;
   flex-direction: column;
-  overflow: hidden;
 
   .console-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 16px;
+    padding: 0 8px;
     background: ${(props) => props.theme.console.headerBg};
     border-bottom: 1px solid ${(props) => props.theme.console.border};
     flex-shrink: 0;
@@ -30,16 +29,14 @@ const StyledWrapper = styled.div`
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 6px 12px;
+    padding: 4px 8px;
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
     color: ${(props) => props.theme.console.buttonColor};
     cursor: pointer;
     transition: all 0.2s ease;
-    font-size: 12px;
-    font-weight: 500;
-    border-radius: 4px 4px 0 0;
+    font-size: ${(props) => props.theme.font.size.sm};
 
     &:hover {
       background: ${(props) => props.theme.console.buttonHoverBg};
@@ -47,9 +44,9 @@ const StyledWrapper = styled.div`
     }
 
     &.active {
-      color: ${(props) => props.theme.console.checkboxColor};
-      border-bottom-color: ${(props) => props.theme.console.checkboxColor};
-      background: ${(props) => props.theme.console.contentBg};
+      color: ${(props) => props.theme.primary.strong};
+      border-bottom-color: ${(props) => props.theme.primary.strong};
+      background: ${(props) => props.theme.background.mantle};
     }
   }
 
@@ -89,12 +86,12 @@ const StyledWrapper = styled.div`
     align-items: center;
     gap: 8px;
     color: ${(props) => props.theme.console.titleColor};
-    font-size: 13px;
+    font-size: ${(props) => props.theme.font.size.base};
     font-weight: 500;
 
     .log-count {
       color: ${(props) => props.theme.console.countColor};
-      font-size: 12px;
+      font-size: ${(props) => props.theme.font.size.sm};
       font-weight: 400;
     }
   }
@@ -144,10 +141,42 @@ const StyledWrapper = styled.div`
     display: flex;
     align-items: center;
     gap: 4px;
-    margin-right: 8px;
-    padding-right: 8px;
-    border-right: 1px solid ${(props) => props.theme.console.border};
   }
+
+  .details-panel-wrapper {
+    position: relative;
+    flex-shrink: 0;
+    height: 100%;
+    display: flex;
+  }
+
+  div.details-drag-handle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    cursor: col-resize;
+    background-color: transparent;
+    width: 6px;
+    position: absolute;
+    left: -3px;
+    top: 0;
+    z-index: 10;
+    transition: opacity 0.2s ease;
+
+    div.drag-request-border {
+      width: 1px;
+      height: 100%;
+      border-left: solid 1px ${(props) => props.theme.sidebar.dragbar.border};
+    }
+
+    &:hover div.drag-request-border {
+      width: 1px;
+      height: 100%;
+      border-left: solid 1px ${(props) => props.theme.sidebar.dragbar.activeBorder};
+    }
+  }
+
 
   .action-controls {
     display: flex;
@@ -159,144 +188,22 @@ const StyledWrapper = styled.div`
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
+    width: 24px;
+    height: 24px;
     background: transparent;
     border: none;
     border-radius: 4px;
-    color: ${(props) => props.theme.console.buttonColor};
+    color: ${(props) => props.theme.text};
     cursor: pointer;
     transition: all 0.2s ease;
 
     &:hover {
-      background: ${(props) => props.theme.console.buttonHoverBg};
-      color: ${(props) => props.theme.console.buttonHoverColor};
+      background: ${(props) => props.theme.background.surface0};
     }
 
     &.close-button:hover {
-      background: #e81123;
-      color: white;
+      background: ${(props) => props.theme.background.surface0};
     }
-  }
-
-  .filter-dropdown {
-    position: relative;
-  }
-
-  .filter-dropdown-trigger {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 8px;
-    background: transparent;
-    border: 1px solid ${(props) => props.theme.console.border};
-    border-radius: 4px;
-    color: ${(props) => props.theme.console.buttonColor};
-    cursor: pointer;
-    transition: all 0.2s ease;
-    font-size: 12px;
-
-    &:hover {
-      background: ${(props) => props.theme.console.buttonHoverBg};
-      color: ${(props) => props.theme.console.buttonHoverColor};
-      border-color: ${(props) => props.theme.console.border};
-    }
-
-    .filter-summary {
-      font-weight: 500;
-      min-width: 24px;
-      text-align: center;
-    }
-  }
-
-  .filter-dropdown-menu {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    min-width: 200px;
-    max-width: 250px;
-    background: ${(props) => props.theme.console.dropdownBg};
-    border: 1px solid ${(props) => props.theme.console.border};
-    border-radius: 6px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    z-index: 1000;
-    overflow: hidden;
-    
-    &.right {
-      left: auto;
-      right: 0;
-    }
-  }
-
-  .filter-dropdown-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 12px;
-    background: ${(props) => props.theme.console.dropdownHeaderBg};
-    border-bottom: 1px solid ${(props) => props.theme.console.border};
-    font-size: 12px;
-    font-weight: 500;
-    color: ${(props) => props.theme.console.titleColor};
-  }
-
-  .filter-toggle-all {
-    background: transparent;
-    border: none;
-    color: ${(props) => props.theme.console.buttonColor};
-    cursor: pointer;
-    font-size: 11px;
-    font-weight: 500;
-    padding: 2px 4px;
-    border-radius: 2px;
-    transition: all 0.2s ease;
-
-    &:hover {
-      background: ${(props) => props.theme.console.buttonHoverBg};
-    }
-  }
-
-  .filter-dropdown-options {
-    padding: 4px 0;
-  }
-
-  .filter-option {
-    display: flex;
-    align-items: center;
-    padding: 6px 12px;
-    cursor: pointer;
-    transition: background-color 0.2s ease;
-
-    &:hover {
-      background: ${(props) => props.theme.console.optionHoverBg};
-    }
-
-    input[type="checkbox"] {
-      margin: 0 8px 0 0;
-      width: 14px;
-      height: 14px;
-      accent-color: ${(props) => props.theme.console.checkboxColor};
-    }
-  }
-
-  .filter-option-content {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex: 1;
-  }
-
-  .filter-option-label {
-    color: ${(props) => props.theme.console.optionLabelColor};
-    font-size: 12px;
-    font-weight: 400;
-  }
-
-  .filter-option-count {
-    color: ${(props) => props.theme.console.optionCountColor};
-    font-size: 11px;
-    font-weight: 400;
-    margin-left: auto;
   }
 
   .console-empty {
@@ -312,32 +219,18 @@ const StyledWrapper = styled.div`
 
     p {
       margin: 0;
-      font-size: 14px;
+      font-size: ${(props) => props.theme.font.size.base};
       font-weight: 500;
     }
 
     span {
-      font-size: 12px;
+      font-size: ${(props) => props.theme.font.size.sm};
       opacity: 0.7;
     }
   }
 
   .logs-container {
     padding: 8px 0;
-  }
-    
-  .method-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 2px 6px;
-    border-radius: 4px;
-    font-size: 10px;
-    font-weight: 600;
-    color: white;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    min-width: 45px;
   }
 
   .log-entry {
@@ -346,7 +239,7 @@ const StyledWrapper = styled.div`
     gap: 12px;
     padding: 4px 16px;
     font-family: ui-monospace, 'SF Mono', 'Monaco', 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
-    font-size: 12px;
+    font-size: ${(props) => props.theme.font.size.sm};
     line-height: 1.4;
     border-left: 2px solid transparent;
     transition: background-color 0.1s ease;
@@ -356,67 +249,67 @@ const StyledWrapper = styled.div`
     }
 
     &.error {
-      border-left-color: #f14c4c;
-      
+      border-left-color: ${(props) => props.theme.status.danger.text};
+
       .log-level {
-        background: #f14c4c;
+        background: ${(props) => props.theme.status.danger.text};
         color: white;
       }
-      
+
       .log-icon {
-        color: #f14c4c;
+        color: ${(props) => props.theme.status.danger.text};
       }
     }
 
     &.warn {
-      border-left-color: #ffcc02;
-      
+      border-left-color: ${(props) => props.theme.status.warning.text};
+
       .log-level {
-        background: #ffcc02;
+        background: ${(props) => props.theme.status.warning.text};
         color: #000;
       }
-      
+
       .log-icon {
-        color: #ffcc02;
+        color: ${(props) => props.theme.status.warning.text};
       }
     }
 
     &.info {
-      border-left-color: #0078d4;
-      
+      border-left-color: ${(props) => props.theme.status.info.text};
+
       .log-level {
-        background: #0078d4;
+        background: ${(props) => props.theme.status.info.text};
         color: white;
       }
-      
+
       .log-icon {
-        color: #0078d4;
+        color: ${(props) => props.theme.status.info.text};
       }
     }
 
     &.debug {
-      border-left-color: #9b59b6;
-      
+      border-left-color: ${(props) => props.theme.colors?.text?.purple || props.theme.status.danger.text};
+
       .log-level {
-        background: #9b59b6;
+        background: ${(props) => props.theme.colors?.text?.purple || props.theme.status.danger.text};
         color: white;
       }
-      
+
       .log-icon {
-        color: #9b59b6;
+        color: ${(props) => props.theme.colors?.text?.purple || props.theme.status.danger.text};
       }
     }
 
     &.log {
-      border-left-color: #6a6a6a;
-      
+      border-left-color: ${(props) => props.theme.colors.text.muted};
+
       .log-level {
-        background: #6a6a6a;
+        background: ${(props) => props.theme.colors.text.muted};
         color: white;
       }
-      
+
       .log-icon {
-        color: #6a6a6a;
+        color: ${(props) => props.theme.colors.text.muted};
       }
     }
   }
@@ -431,13 +324,13 @@ const StyledWrapper = styled.div`
 
   .log-timestamp {
     color: ${(props) => props.theme.console.timestampColor};
-    font-size: 11px;
+    font-size: ${(props) => props.theme.font.size.xs};
     font-weight: 400;
   }
 
   .log-level {
     font-size: 9px;
-    font-weight: 600;
+    font-weight: 500;
     padding: 2px 4px;
     border-radius: 2px;
     text-transform: uppercase;
@@ -465,7 +358,7 @@ const StyledWrapper = styled.div`
         background: transparent !important;
         
         .object-key-val {
-          font-size: 12px !important;
+          font-size: ${(props) => props.theme.font.size.sm} !important;
         }
         
         .object-key {
@@ -517,4 +410,4 @@ const StyledWrapper = styled.div`
   }
 `;
 
-export default StyledWrapper; 
+export default StyledWrapper;

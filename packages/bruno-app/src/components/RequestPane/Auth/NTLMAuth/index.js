@@ -1,6 +1,5 @@
 import React from 'react';
 import SensitiveFieldWarning from 'components/SensitiveFieldWarning';
-import { useDetectSensitiveField } from 'hooks/useDetectSensitiveField';
 import get from 'lodash/get';
 import { useTheme } from 'providers/Theme';
 import { useDispatch } from 'react-redux';
@@ -9,16 +8,14 @@ import { updateAuth } from 'providers/ReduxStore/slices/collections';
 import { sendRequest, saveRequest } from 'providers/ReduxStore/slices/collections/actions';
 import StyledWrapper from './StyledWrapper';
 
-const NTLMAuth = ({ item, collection, request, save, updateAuth }) => {
+const NTLMAuth = ({ item, collection, request, save, updateAuth, readOnly }) => {
   const dispatch = useDispatch();
   const { storedTheme } = useTheme();
 
   const ntlmAuth = get(request, 'auth.ntlm', {});
-  const { isSensitive } = useDetectSensitiveField(collection);
-  const { showWarning, warningMessage } = isSensitive(ntlmAuth?.password);
 
   const handleRun = () => dispatch(sendRequest(item, collection.uid));
-  
+
   const handleSave = () => {
     save();
   };
@@ -66,12 +63,12 @@ const NTLMAuth = ({ item, collection, request, save, updateAuth }) => {
         }
       })
     );
-  };  
+  };
 
   return (
     <StyledWrapper className="mt-2 w-full">
-      <label className="block font-medium mb-2">Username</label>
-      <div className="single-line-editor-wrapper mb-2">
+      <label className="block mb-1">Username</label>
+      <div className="single-line-editor-wrapper mb-3">
         <SingleLineEditor
           value={ntlmAuth.username || ''}
           theme={storedTheme}
@@ -80,11 +77,13 @@ const NTLMAuth = ({ item, collection, request, save, updateAuth }) => {
           onRun={handleRun}
           collection={collection}
           item={item}
+          readOnly={readOnly}
+          isCompact
         />
       </div>
 
-      <label className="block font-medium mb-2">Password</label>
-      <div className="single-line-editor-wrapper flex items-center">
+      <label className="block mb-1">Password</label>
+      <div className="single-line-editor-wrapper mb-3 flex items-center">
         <SingleLineEditor
           value={ntlmAuth.password || ''}
           theme={storedTheme}
@@ -94,11 +93,13 @@ const NTLMAuth = ({ item, collection, request, save, updateAuth }) => {
           collection={collection}
           item={item}
           isSecret={true}
+          readOnly={readOnly}
+          isCompact
         />
-        {showWarning && <SensitiveFieldWarning fieldName="ntlm-password" warningMessage={warningMessage} />}
+        <SensitiveFieldWarning fieldName="ntlm-password" secretName="password" value={ntlmAuth?.password} collection={collection} item={item} fieldKey="password" onReplaceValue={handlePasswordChange} />
       </div>
 
-      <label className="block font-medium mb-2">Domain</label>
+      <label className="block mb-1">Domain</label>
       <div className="single-line-editor-wrapper">
         <SingleLineEditor
           value={ntlmAuth.domain || ''}
@@ -108,6 +109,8 @@ const NTLMAuth = ({ item, collection, request, save, updateAuth }) => {
           onRun={handleRun}
           collection={collection}
           item={item}
+          readOnly={readOnly}
+          isCompact
         />
       </div>
     </StyledWrapper>

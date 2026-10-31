@@ -1,44 +1,50 @@
-const { ipcMain } = require('electron');
-const { getPreferences, savePreferences, preferencesUtil } = require('../store/preferences');
-const { isDirectory } = require('../utils/filesystem');
-const { openCollection } = require('../app/collections');
+const fs = require('fs');
+const { ipcMain, nativeTheme } = require('electron');
+const { getPreferences, savePreferences } = require('../store/preferences');
+const { getGitVersion } = require('../utils/git');
 const { globalEnvironmentsStore } = require('../store/global-environments');
-``;
-const registerPreferencesIpc = (mainWindow, watcher, lastOpenedCollections) => {
+const { getCachedSystemProxy, fetchSystemProxy } = require('../store/system-proxy');
+const { resolveDefaultLocation } = require('../utils/default-location');
+const onboardUser = require('../app/onboarding');
+const LastOpenedCollections = require('../store/last-opened-collections');
+const WindowStateStore = require('../store/window-state');
+const { clearAgentCache, clearPacCache } = require('@usebruno/requests');
+
+const registerPreferencesIpc = (mainWindow) => {
+  const lastOpenedCollections = new LastOpenedCollections();
+
+  const onboardingPromise = onboardUser(mainWindow, lastOpenedCollections);
+
   ipcMain.handle('renderer:ready', async (event) => {
+    await onboardingPromise;
+
     // load preferences
     const preferences = getPreferences();
-    mainWindow.webContents.send('main:load-preferences', preferences);
 
-    // load system proxy vars
-    const systemProxyVars = preferencesUtil.getSystemProxyEnvVariables();
-    const { http_proxy, https_proxy, no_proxy } = systemProxyVars || {};
-    mainWindow.webContents.send('main:load-system-proxy-env', { http_proxy, https_proxy, no_proxy });
+    // Set the default location if it hasn't been set by the user
+    if (!preferences.general?.defaultLocation || !fs.existsSync(preferences.general.defaultLocation)) {
+      preferences.general ??= {};
+      preferences.general.defaultLocation = resolveDefaultLocation();
+      await savePreferences(preferences);
+    }
+
+    mainWindow.webContents.send('main:load-preferences', preferences);
 
     try {
       // load global environments
       const globalEnvironments = globalEnvironmentsStore.getGlobalEnvironments();
       let activeGlobalEnvironmentUid = globalEnvironmentsStore.getActiveGlobalEnvironmentUid();
-      activeGlobalEnvironmentUid = globalEnvironments?.find(env => env?.uid == activeGlobalEnvironmentUid) ? activeGlobalEnvironmentUid : null;
+      activeGlobalEnvironmentUid = globalEnvironments?.find((env) => env?.uid == activeGlobalEnvironmentUid) ? activeGlobalEnvironmentUid : null;
       mainWindow.webContents.send('main:load-global-environments', { globalEnvironments, activeGlobalEnvironmentUid });
-    }
-    catch(error) {
-      console.error("Error occured while fetching global environements!");
+    } catch (error) {
+      console.error('Error occured while fetching global environements!');
       console.error(error);
     }
 
-    // reload last opened collections
-    const lastOpened = lastOpenedCollections.getAll();
+    const gitVersion = await getGitVersion();
+    mainWindow.webContents.send('main:git-version', gitVersion);
 
-    if (lastOpened && lastOpened.length) {
-      for (let collectionPath of lastOpened) {
-        if (isDirectory(collectionPath)) {
-          await openCollection(mainWindow, watcher, collectionPath, {
-            dontSendDisplayErrors: true
-          });
-        }
-      }
-    }
+    ipcMain.emit('main:renderer-ready', mainWindow);
   });
 
   ipcMain.on('main:open-preferences', () => {
@@ -51,6 +57,43 @@ const registerPreferencesIpc = (mainWindow, watcher, lastOpenedCollections) => {
     } catch (error) {
       return Promise.reject(error);
     }
+  });
+
+  ipcMain.handle('renderer:clear-http-https-agent-cache', async () => {
+    try {
+      clearAgentCache();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  });
+
+  ipcMain.handle('renderer:refresh-pac-cache', async () => {
+    try {
+      clearPacCache();
+      clearAgentCache();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  });
+
+  ipcMain.on('renderer:theme-change', (event, theme, themeBg) => {
+    nativeTheme.themeSource = theme;
+    const windowStateStore = new WindowStateStore();
+    windowStateStore.setThemeMode(theme);
+    if (themeBg) {
+      windowStateStore.setThemeBg(themeBg);
+    }
+  });
+
+  ipcMain.handle('renderer:get-system-proxy-variables', async () => {
+    return await getCachedSystemProxy();
+  });
+
+  ipcMain.handle('renderer:refresh-system-proxy', async () => {
+    const variables = await fetchSystemProxy({ refresh: true });
+    clearPacCache();
+    clearAgentCache();
+    return variables;
   });
 };
 

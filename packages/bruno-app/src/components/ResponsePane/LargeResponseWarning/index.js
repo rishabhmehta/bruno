@@ -4,22 +4,27 @@ import toast from 'react-hot-toast';
 import get from 'lodash/get';
 import StyledWrapper from './StyledWrapper';
 import { formatSize } from 'utils/common/index';
+import Button from 'ui/Button/index';
+import { MAX_RENDERABLE_RESPONSE_BYTES } from 'utils/common/constants';
 
 const LargeResponseWarning = ({ item, responseSize, onRevealResponse }) => {
   const { ipcRenderer } = window;
   const response = item.response || {};
+  const isDownloadOnly = responseSize > MAX_RENDERABLE_RESPONSE_BYTES;
 
-  const saveResponseToFile = () => {
-    return new Promise((resolve, reject) => {
+  const downloadResponseToFile = () => {
+    return new Promise((resolve) => {
       ipcRenderer
-        .invoke('renderer:save-response-to-file', response, item.requestSent.url)
-        .then(() => {
-          toast.success('Response saved to file');
+        .invoke('renderer:save-response-to-file', response, item.requestSent.url, item.pathname)
+        .then((result) => {
+          if (result && result.success) {
+            toast.success('Response downloaded to file');
+          }
           resolve();
         })
         .catch((err) => {
           toast.error(get(err, 'error.message') || 'Something went wrong!');
-          reject(err);
+          resolve();
         });
     });
   };
@@ -52,38 +57,56 @@ const LargeResponseWarning = ({ item, responseSize, onRevealResponse }) => {
           </div>
           <div className="warning-description">
             Handling responses over <span className="size-highlight supported-size">{formatSize(10 * 1024 * 1024)}</span> could degrade performance.
-          <br />
+            <br />
             Size of current response: <span className="size-highlight current-size">{formatSize(responseSize)}</span>
+            {isDownloadOnly ? (
+              <>
+                <br />
+                <span data-testid="large-response-download-only">
+                  Responses over <span className="size-highlight">{formatSize(MAX_RENDERABLE_RESPONSE_BYTES)}</span> can only be downloaded.
+                </span>
+              </>
+            ) : null}
           </div>
         </div>
       </div>
       <div className="warning-actions">
-        <button
-          className="btn-reveal"
+        <Button
+          icon={<IconEye size={18} strokeWidth={1.5} />}
+          iconPosition="left"
           onClick={onRevealResponse}
+          disabled={isDownloadOnly}
+          data-testid="large-response-view"
           title="Show response content"
+          color="secondary"
+          size="sm"
         >
-          <IconEye size={18} strokeWidth={1.5} />
           View
-        </button>
-        <button
-          className="btn-save"
-          onClick={saveResponseToFile}
-          disabled={!response.dataBuffer}
-          title="Save response to file"
+        </Button>
+        <Button
+          icon={<IconDownload size={18} strokeWidth={1.5} />}
+          iconPosition="left"
+          onClick={downloadResponseToFile}
+          disabled={!response.dataBuffer && !response.storedRequestUid}
+          data-testid="large-response-download"
+          title="Download response to file"
+          color="secondary"
+          size="sm"
         >
-          <IconDownload size={18} strokeWidth={1.5} />
-          Save
-        </button>
-        <button
-          className="btn-copy"
+          Download
+        </Button>
+        <Button
+          icon={<IconCopy size={18} strokeWidth={1.5} />}
+          iconPosition="left"
           onClick={copyResponse}
-          disabled={!response.data}
+          disabled={isDownloadOnly || !response.data}
+          data-testid="large-response-copy"
           title="Copy response to clipboard"
+          color="secondary"
+          size="sm"
         >
-          <IconCopy size={18} strokeWidth={1.5} />
           Copy
-        </button>
+        </Button>
       </div>
     </StyledWrapper>
   );

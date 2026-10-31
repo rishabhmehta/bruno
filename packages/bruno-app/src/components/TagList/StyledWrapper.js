@@ -17,23 +17,66 @@ const StyledWrapper = styled.div`
     background-color: ${(props) => props.theme.sidebar.bg};
     border: 1px solid ${(props) => props.theme.requestTabs.bottomBorder};
     border-radius: 3px;
-    font-size: 12px;
+    font-size: ${(props) => props.theme.font.size.sm};
     font-weight: 500;
     color: ${(props) => props.theme.text};
     max-width: 200px;
     transition: all 0.2s ease;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    cursor: default;
 
-    &:hover {
-      background-color: ${(props) => props.theme.requestTabs.active.bg};
-      border-color: ${(props) => props.theme.requestTabs.active.border || props.theme.requestTabs.bottomBorder};
+    &:has(.tag-remove:hover) {
+      background-color: ${(props) => props.theme.background.surface2};
+      border-color: ${(props) => props.theme.requestTabs.bottomBorder};
       box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       transform: translateY(-1px);
     }
+
+    .tag-remove {
+      cursor: pointer;
+    }
+  }
+
+  .inherited-tags {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .inherited-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    align-self: flex-start;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    font-size: ${(props) => props.theme.font.size.sm};
+    font-weight: 500;
+    color: ${(props) => props.theme.text};
+
+    &:hover {
+      opacity: 0.8;
+    }
+
+    &:focus-visible {
+      outline: 2px solid ${(props) => props.theme.text};
+      outline-offset: 2px;
+      border-radius: 3px;
+    }
+  }
+
+  /* Tags cascaded down from a parent folder: not removable here, so they read as muted */
+  .tag-item.inherited {
+    border-style: dashed;
+    background-color: transparent;
+    box-shadow: none;
+    color: ${(props) => props.theme.colors.text.subtext2};
   }
 
   .tag-icon {
-    color: ${(props) => props.theme.textSecondary || props.theme.text};
+    color: ${(props) => props.theme.colors.text.subtext2};
     opacity: 0.7;
     flex-shrink: 0;
   }
@@ -55,20 +98,18 @@ const StyledWrapper = styled.div`
     cursor: pointer;
     padding: 2px;
     border-radius: 3px;
-    color: ${(props) => props.theme.textSecondary || props.theme.text};
+    color: ${(props) => props.theme.colors.text.muted};
     transition: all 0.2s ease;
     flex-shrink: 0;
     opacity: 0.7;
 
     &:hover {
-      background-color: ${(props) => props.theme.danger};
-      color: white;
+      color: ${(props) => props.theme.text};
       opacity: 1;
-      transform: scale(1.1);
     }
 
     &:focus-visible {
-      outline: 2px solid ${(props) => props.theme.danger};
+      outline: 2px solid ${(props) => props.theme.text};
       outline-offset: 1px;
     }
   }
@@ -81,7 +122,7 @@ const StyledWrapper = styled.div`
     background-color: ${(props) => props.theme.sidebar.bg};
     border: 2px dashed ${(props) => props.theme.requestTabs.bottomBorder};
     border-radius: 3px;
-    color: ${(props) => props.theme.textSecondary || props.theme.text};
+    color: ${(props) => props.theme.colors.text.muted};
     text-align: left;
   }
 
@@ -96,18 +137,18 @@ const StyledWrapper = styled.div`
   }
 
   .empty-title {
-    font-weight: 600;
+    font-weight: 500;
     margin: 0 0 4px 0;
-    font-size: 14px;
+    font-size: ${(props) => props.theme.font.size.base};
     color: ${(props) => props.theme.text};
   }
 
   .empty-subtitle {
     margin: 0;
-    font-size: 12px;
+    font-size: ${(props) => props.theme.font.size.sm};
     opacity: 0.8;
     line-height: 1.5;
-    color: ${(props) => props.theme.textSecondary || props.theme.text};
+    color: ${(props) => props.theme.colors.text.muted};
   }
 
   /* Responsive design */
@@ -118,7 +159,7 @@ const StyledWrapper = styled.div`
     
     .tag-item {
       padding: 4px 8px;
-      font-size: 11px;
+      font-size: ${(props) => props.theme.font.size.xs};
     }
     
     .empty-state {
@@ -129,4 +170,4 @@ const StyledWrapper = styled.div`
   }
 `;
 
-export default StyledWrapper; 
+export default StyledWrapper;

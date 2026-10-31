@@ -7,18 +7,15 @@ import { updateAuth } from 'providers/ReduxStore/slices/collections';
 import { sendRequest, saveRequest } from 'providers/ReduxStore/slices/collections/actions';
 import StyledWrapper from './StyledWrapper';
 import SensitiveFieldWarning from 'components/SensitiveFieldWarning';
-import { useDetectSensitiveField } from 'hooks/useDetectSensitiveField';
 
-const AwsV4Auth = ({ item, collection, updateAuth, request, save }) => {
+const AwsV4Auth = ({ item, collection, updateAuth, request, save, readOnly }) => {
   const dispatch = useDispatch();
   const { storedTheme } = useTheme();
 
   const awsv4Auth = get(request, 'auth.awsv4', {});
-  const { isSensitive } = useDetectSensitiveField(collection);
-  const { showWarning, warningMessage } = isSensitive(awsv4Auth?.secretAccessKey);
 
   const handleRun = () => dispatch(sendRequest(item, collection.uid));
-  
+
   const handleSave = () => {
     save();
   };
@@ -133,8 +130,8 @@ const AwsV4Auth = ({ item, collection, updateAuth, request, save }) => {
 
   return (
     <StyledWrapper className="mt-2 w-full">
-      <label className="block font-medium mb-2">Access Key ID</label>
-      <div className="single-line-editor-wrapper mb-2">
+      <label className="block mb-1">Access Key ID</label>
+      <div className="single-line-editor-wrapper mb-3">
         <SingleLineEditor
           value={awsv4Auth.accessKeyId || ''}
           theme={storedTheme}
@@ -143,11 +140,13 @@ const AwsV4Auth = ({ item, collection, updateAuth, request, save }) => {
           onRun={handleRun}
           collection={collection}
           item={item}
+          readOnly={readOnly}
+          isCompact
         />
       </div>
 
-      <label className="block font-medium mb-2">Secret Access Key</label>
-      <div className="single-line-editor-wrapper mb-2 flex items-center">
+      <label className="block mb-1">Secret Access Key</label>
+      <div className="single-line-editor-wrapper mb-3 flex items-center">
         <SingleLineEditor
           value={awsv4Auth.secretAccessKey || ''}
           theme={storedTheme}
@@ -157,13 +156,15 @@ const AwsV4Auth = ({ item, collection, updateAuth, request, save }) => {
           collection={collection}
           item={item}
           isSecret={true}
+          readOnly={readOnly}
+          isCompact
         />
 
-        {showWarning && <SensitiveFieldWarning fieldName="awsv4-secret-access-key" warningMessage={warningMessage} />}
+        <SensitiveFieldWarning fieldName="awsv4-secret-access-key" secretName="secretAccessKey" value={awsv4Auth?.secretAccessKey} collection={collection} item={item} fieldKey="secretAccessKey" onReplaceValue={handleSecretAccessKeyChange} />
       </div>
 
-      <label className="block font-medium mb-2">Session Token</label>
-      <div className="single-line-editor-wrapper mb-2">
+      <label className="block mb-1">Session Token</label>
+      <div className="single-line-editor-wrapper mb-3 flex items-center">
         <SingleLineEditor
           value={awsv4Auth.sessionToken || ''}
           theme={storedTheme}
@@ -172,11 +173,15 @@ const AwsV4Auth = ({ item, collection, updateAuth, request, save }) => {
           onRun={handleRun}
           collection={collection}
           item={item}
+          isSecret={true}
+          readOnly={readOnly}
+          isCompact
         />
+        <SensitiveFieldWarning fieldName="awsv4-session-token" secretName="sessionToken" value={awsv4Auth?.sessionToken} collection={collection} item={item} fieldKey="sessionToken" onReplaceValue={handleSessionTokenChange} />
       </div>
 
-      <label className="block font-medium mb-2">Service</label>
-      <div className="single-line-editor-wrapper mb-2">
+      <label className="block mb-1">Service</label>
+      <div className="single-line-editor-wrapper mb-3">
         <SingleLineEditor
           value={awsv4Auth.service || ''}
           theme={storedTheme}
@@ -185,11 +190,13 @@ const AwsV4Auth = ({ item, collection, updateAuth, request, save }) => {
           onRun={handleRun}
           collection={collection}
           item={item}
+          readOnly={readOnly}
+          isCompact
         />
       </div>
 
-      <label className="block font-medium mb-2">Region</label>
-      <div className="single-line-editor-wrapper mb-2">
+      <label className="block mb-1">Region</label>
+      <div className="single-line-editor-wrapper mb-3">
         <SingleLineEditor
           value={awsv4Auth.region || ''}
           theme={storedTheme}
@@ -198,11 +205,13 @@ const AwsV4Auth = ({ item, collection, updateAuth, request, save }) => {
           onRun={handleRun}
           collection={collection}
           item={item}
+          readOnly={readOnly}
+          isCompact
         />
       </div>
 
-      <label className="block font-medium mb-2">Profile Name</label>
-      <div className="single-line-editor-wrapper mb-2">
+      <label className="block mb-1">Profile Name</label>
+      <div className="single-line-editor-wrapper">
         <SingleLineEditor
           value={awsv4Auth.profileName || ''}
           theme={storedTheme}
@@ -211,6 +220,8 @@ const AwsV4Auth = ({ item, collection, updateAuth, request, save }) => {
           onRun={handleRun}
           collection={collection}
           item={item}
+          readOnly={readOnly}
+          isCompact
         />
       </div>
     </StyledWrapper>

@@ -1,28 +1,34 @@
-import React, { useState, useEffect } from 'react';
+import React, { useRef } from 'react';
 import find from 'lodash/find';
 import classnames from 'classnames';
 import { useDispatch, useSelector } from 'react-redux';
 import { updateResponsePaneTab } from 'providers/ReduxStore/slices/tabs';
 import Overlay from '../Overlay';
 import Placeholder from '../Placeholder';
+import ResponseAlertsSection from '../ResponseAlertsSection';
+import ResponseErrorsIcon from '../ResponseErrorsIcon';
+import GrpcTestResults, { buildGrpcTestSections, countGrpcTestResults } from './GrpcTestResults';
+import GrpcTestResultsLabel from './GrpcTestResultsLabel';
+import HeightBoundContainer from 'ui/HeightBoundContainer';
 import GrpcResponseHeaders from './GrpcResponseHeaders';
 import GrpcStatusCode from './GrpcStatusCode';
 import ResponseTime from '../ResponseTime/index';
 import Timeline from '../Timeline';
 import ClearTimeline from '../ClearTimeline';
-import ResponseSave from '../ResponseSave';
 import ResponseClear from '../ResponseClear';
 import StyledWrapper from './StyledWrapper';
 import ResponseTrailers from './ResponseTrailers';
 import GrpcQueryResult from './GrpcQueryResult';
 import ResponseLayoutToggle from '../ResponseLayoutToggle';
-import Tab from 'components/Tab';
+import ResponsiveTabs from 'ui/ResponsiveTabs';
+import useResponsePaneErrors from 'hooks/useResponsePaneErrors';
 
 const GrpcResponsePane = ({ item, collection }) => {
   const dispatch = useDispatch();
   const tabs = useSelector((state) => state.tabs.tabs);
   const activeTabUid = useSelector((state) => state.tabs.activeTabUid);
   const isLoading = ['queued', 'sending'].includes(item.requestState);
+  const rightContentRef = useRef(null);
 
   const requestTimeline = [...(collection?.timeline || [])].filter((obj) => {
     if (obj.itemUid === item.uid) return true;
@@ -37,7 +43,54 @@ const GrpcResponsePane = ({ item, collection }) => {
     );
   };
 
+  const focusedTab = find(tabs, (t) => t.uid === activeTabUid);
+  const isResponseTabActive = focusedTab?.responsePaneTab === 'response';
+  const responsePaneErrors = useResponsePaneErrors(item, collection, {
+    isResponseTabActive,
+    showResponseTab: () => selectTab('response')
+  });
+
   const response = item.response || {};
+
+  const metadataCount = Array.isArray(response.metadata) ? response.metadata.length : 0;
+  const trailersCount = Array.isArray(response.trailers) ? response.trailers.length : 0;
+  const responsesCount = Array.isArray(response.responses) ? response.responses.length : 0;
+
+  const testSections = buildGrpcTestSections(item);
+  const hasTestResults = countGrpcTestResults(testSections) > 0;
+
+  const allTabs = [
+    {
+      key: 'response',
+      label: 'Response',
+      indicator:
+        responsesCount > 0 ? (
+          <sup data-testid="grpc-tab-response-count" className="ml-1 font-medium">
+            {responsesCount}
+          </sup>
+        ) : null
+    },
+    {
+      key: 'headers',
+      label: 'Metadata',
+      indicator: metadataCount > 0 ? <sup className="ml-1 font-medium">{metadataCount}</sup> : null
+    },
+    {
+      key: 'trailers',
+      label: 'Trailers',
+      indicator: trailersCount > 0 ? <sup className="ml-1 font-medium">{trailersCount}</sup> : null
+    },
+    {
+      key: 'timeline',
+      label: 'Timeline',
+      indicator: null
+    },
+    {
+      key: 'tests',
+      label: <GrpcTestResultsLabel sections={testSections} />,
+      indicator: null
+    }
+  ];
 
   const getTabPanel = (tab) => {
     switch (tab) {
@@ -51,13 +104,31 @@ const GrpcResponsePane = ({ item, collection }) => {
         return <ResponseTrailers trailers={response.trailers} />;
       }
       case 'timeline': {
-        return <Timeline collection={collection} item={item} />;
+        return <Timeline collection={collection} item={item} activeTabUid={activeTabUid} />;
+      }
+      case 'tests': {
+        return <GrpcTestResults key={item.uid} item={item} sections={testSections} />;
       }
       default: {
         return <div>404 | Not found</div>;
       }
     }
   };
+
+  const alertsSection = isResponseTabActive ? (
+    <ResponseAlertsSection item={item} collection={collection} responsePaneErrors={responsePaneErrors} />
+  ) : null;
+
+  const errorsIcon = responsePaneErrors.isCardClosed ? (
+    <ResponseErrorsIcon count={responsePaneErrors.errors.length} onClick={responsePaneErrors.reopenCard} />
+  ) : null;
+
+  const standaloneAlerts = responsePaneErrors.errors.length ? (
+    <div className="flex flex-col px-4 pt-2">
+      {alertsSection}
+      {errorsIcon ? <div className="flex justify-end">{errorsIcon}</div> : null}
+    </div>
+  ) : null;
 
   if (isLoading && !item.response) {
     return (
@@ -67,11 +138,12 @@ const GrpcResponsePane = ({ item, collection }) => {
     );
   }
 
-  if (!item.response && !requestTimeline?.length) {
+  if (!item.response && !requestTimeline?.length && !hasTestResults) {
     return (
-      <StyledWrapper className="flex h-full relative">
-        <Placeholder />
-      </StyledWrapper>
+      <HeightBoundContainer>
+        {standaloneAlerts}
+        {!responsePaneErrors.isCardFullPane && <Placeholder />}
+      </HeightBoundContainer>
     );
   }
 
@@ -79,79 +151,58 @@ const GrpcResponsePane = ({ item, collection }) => {
     return <div>Something went wrong</div>;
   }
 
-  const focusedTab = find(tabs, (t) => t.uid === activeTabUid);
   if (!focusedTab || !focusedTab.uid || !focusedTab.responsePaneTab) {
     return <div className="pb-4 px-4">An error occurred!</div>;
   }
 
-  const tabConfig = [
-    {
-      name: 'response',
-      label: 'Response',
-      count: Array.isArray(response.responses) ? response.responses.length : 0
-    },
-    {
-      name: 'headers',
-      label: 'Metadata',
-      count: Array.isArray(response.metadata) ? response.metadata.length : 0
-    },
-    {
-      name: 'trailers',
-      label: 'Trailers',
-      count: Array.isArray(response.trailers) ? response.trailers.length : 0
-    },
-    {
-      name: 'timeline',
-      label: 'Timeline'
-    }
-  ];
+  const rightContent = !isLoading ? (
+    <div ref={rightContentRef} className="flex items-center">
+      {errorsIcon}
+      {focusedTab?.responsePaneTab === 'timeline' ? (
+        <>
+          <ResponseLayoutToggle />
+          <ClearTimeline item={item} collection={collection} />
+        </>
+      ) : item?.response ? (
+        <>
+          <ResponseLayoutToggle />
+          <ResponseClear item={item} collection={collection} />
+          <GrpcStatusCode
+            status={response.statusCode}
+            text={response.statusText}
+            details={response.statusDescription}
+          />
+          <ResponseTime duration={response.duration} />
+        </>
+      ) : null}
+    </div>
+  ) : null;
 
   return (
     <StyledWrapper className="flex flex-col h-full relative">
-      <div className="flex flex-wrap items-center pl-3 pr-4 tabs" role="tablist">
-        {tabConfig.map((tab) => (
-          <Tab
-            key={tab.name}
-            name={tab.name}
-            label={tab.label}
-            isActive={focusedTab.responsePaneTab === tab.name}
-            onClick={selectTab}
-            count={tab.count}
-          />
-        ))}
-        {!isLoading ? (
-          <div className="flex flex-grow justify-end items-center">
-            {focusedTab?.responsePaneTab === 'timeline' ? (
-              <>
-                <ResponseLayoutToggle />
-                <ClearTimeline item={item} collection={collection} />
-              </>
-            ) : item?.response ? (
-              <>
-                <ResponseLayoutToggle />
-                <ResponseClear item={item} collection={collection} />
-                <GrpcStatusCode
-                  status={response.statusCode}
-                  text={response.statusText}
-                  details={response.statusDescription}
-                />
-                <ResponseTime duration={response.duration} />
-              </>
-            ) : null}
-          </div>
-        ) : null}
+      <div className="px-4">
+        <ResponsiveTabs
+          tabs={allTabs}
+          activeTab={focusedTab.responsePaneTab}
+          onTabSelect={selectTab}
+          rightContent={rightContent}
+          rightContentRef={rightContentRef}
+        />
       </div>
-      <section
-        className={`flex flex-col flex-grow pl-3 pr-4 h-0 ${focusedTab.responsePaneTab === 'response' ? '' : 'mt-4'}`}
-      >
+      <section className="response-pane-content">
         {isLoading ? <Overlay item={item} collection={collection} /> : null}
-        {!item?.response ? (
-          focusedTab?.responsePaneTab === 'timeline' && requestTimeline?.length ? (
-            <Timeline collection={collection} item={item} />
-          ) : null
-        ) : (
-          <>{getTabPanel(focusedTab.responsePaneTab)}</>
-        )}
+        {alertsSection}
+        <div className={classnames('response-tab-content', { hidden: responsePaneErrors.isCardFullPane })}>
+          {!item?.response ? (
+            focusedTab?.responsePaneTab === 'timeline' && requestTimeline?.length ? (
+              <Timeline collection={collection} item={item} activeTabUid={activeTabUid} />
+            ) : focusedTab?.responsePaneTab === 'tests' ? (
+              <GrpcTestResults key={item.uid} item={item} sections={testSections} />
+            ) : null
+          ) : (
+            <>{getTabPanel(focusedTab.responsePaneTab)}</>
+          )}
+        </div>
       </section>
     </StyledWrapper>
   );

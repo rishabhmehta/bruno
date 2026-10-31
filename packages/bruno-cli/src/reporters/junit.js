@@ -1,6 +1,7 @@
 const os = require('os');
 const fs = require('fs');
 const xmlbuilder = require('xmlbuilder');
+const { stripExtension } = require('../utils/filesystem');
 
 const makeJUnitOutput = async (results, outputPath) => {
   const output = {
@@ -11,70 +12,110 @@ const makeJUnitOutput = async (results, outputPath) => {
 
   results.forEach((result) => {
     const assertionTestCount = result.assertionResults ? result.assertionResults.length : 0;
+    const preRequestTestCount = result.preRequestTestResults ? result.preRequestTestResults.length : 0;
     const testCount = result.testResults ? result.testResults.length : 0;
-    const totalTests = assertionTestCount + testCount;
+    const postResponseTestCount = result.postResponseTestResults ? result.postResponseTestResults.length : 0;
+    const totalTests = assertionTestCount + preRequestTestCount + testCount + postResponseTestCount;
+    const classname = stripExtension(result.path);
 
     const suite = {
-      '@name': result.suitename,
+      '@name': result.name,
+      '@file': result.test.filename,
       '@errors': 0,
       '@failures': 0,
       '@skipped': 0,
       '@tests': totalTests,
       '@timestamp': new Date().toISOString().split('Z')[0],
       '@hostname': os.hostname(),
-      '@time': result.runtime.toFixed(3),
-      testcase: []
+      '@time': result.runDuration.toFixed(3),
+      'testcase': []
     };
 
-    result.assertionResults &&
-      result.assertionResults.forEach((assertion) => {
-        const testcase = {
-          '@name': `${assertion.lhsExpr} ${assertion.rhsExpr}`,
-          '@status': assertion.status,
-          '@classname': result.request.url,
-          '@time': (result.runtime / totalTests).toFixed(3)
-        };
+    result.assertionResults
+    && result.assertionResults.forEach((assertion) => {
+      const testcase = {
+        '@name': `${assertion.lhsExpr} ${assertion.rhsExpr}`,
+        '@status': assertion.status,
+        '@classname': classname,
+        '@time': (result.runDuration / totalTests).toFixed(3)
+      };
 
-        if (assertion.status === 'fail') {
-          suite['@failures']++;
+      if (assertion.status === 'fail') {
+        suite['@failures']++;
 
-          testcase.failure = [{ '@type': 'failure', '@message': assertion.error }];
-        }
+        testcase.failure = [{ '@type': 'failure', '@message': assertion.error }];
+      }
 
-        suite.testcase.push(testcase);
-      });
+      suite.testcase.push(testcase);
+    });
 
-    result.testResults &&
-      result.testResults.forEach((test) => {
-        const testcase = {
-          '@name': test.description,
-          '@status': test.status,
-          '@classname': result.request.url,
-          '@time': (result.runtime / totalTests).toFixed(3)
-        };
+    result.preRequestTestResults
+    && result.preRequestTestResults.forEach((test) => {
+      const testcase = {
+        '@name': test.description,
+        '@status': test.status,
+        '@classname': classname,
+        '@time': (result.runDuration / totalTests).toFixed(3)
+      };
 
-        if (test.status === 'fail') {
-          suite['@failures']++;
+      if (test.status === 'fail') {
+        suite['@failures']++;
 
-          testcase.failure = [{ '@type': 'failure', '@message': test.error }];
-        }
+        testcase.failure = [{ '@type': 'failure', '@message': test.error }];
+      }
 
-        suite.testcase.push(testcase);
-      });
+      suite.testcase.push(testcase);
+    });
+
+    result.testResults
+    && result.testResults.forEach((test) => {
+      const testcase = {
+        '@name': test.description,
+        '@status': test.status,
+        '@classname': classname,
+        '@time': (result.runDuration / totalTests).toFixed(3)
+      };
+
+      if (test.status === 'fail') {
+        suite['@failures']++;
+
+        testcase.failure = [{ '@type': 'failure', '@message': test.error }];
+      }
+
+      suite.testcase.push(testcase);
+    });
+
+    result.postResponseTestResults
+    && result.postResponseTestResults.forEach((test) => {
+      const testcase = {
+        '@name': test.description,
+        '@status': test.status,
+        '@classname': classname,
+        '@time': (result.runDuration / totalTests).toFixed(3)
+      };
+
+      if (test.status === 'fail') {
+        suite['@failures']++;
+
+        testcase.failure = [{ '@type': 'failure', '@message': test.error }];
+      }
+
+      suite.testcase.push(testcase);
+    });
 
     if (result?.skipped) {
       suite['@skipped'] = 1;
-    }
-    else if (result.error) {
+      suite.skipped = [{ '@message': result.skipReason === 'bail' ? 'Request skipped due to bail' : 'Request Skipped' }];
+    } else if (result.error) {
       suite['@errors'] = 1;
       suite['@tests'] = 1;
       suite.testcase = [
         {
           '@name': 'Test suite has no errors',
           '@status': 'fail',
-          '@classname': result.request.url,
-          '@time': result.runtime.toFixed(3),
-          error: [{ '@type': 'error', '@message': result.error }]
+          '@classname': classname,
+          '@time': result.runDuration.toFixed(3),
+          'error': [{ '@type': 'error', '@message': result.error }]
         }
       ];
     }

@@ -1,18 +1,23 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import get from 'lodash/get';
 import { useDispatch, useSelector } from 'react-redux';
 import CodeEditor from 'components/CodeEditor';
 import { updateCollectionTests } from 'providers/ReduxStore/slices/collections';
-import { saveCollectionRoot } from 'providers/ReduxStore/slices/collections/actions';
+import { saveCollectionSettings } from 'providers/ReduxStore/slices/collections/actions';
 import { useTheme } from 'providers/Theme';
 import StyledWrapper from './StyledWrapper';
+import Button from 'ui/Button';
+import { usePersistedState } from 'hooks/usePersistedState';
+import { useFocusErrorLine } from 'hooks/useFocusErrorLine';
 
 const Tests = ({ collection }) => {
   const dispatch = useDispatch();
-  const tests = get(collection, 'root.request.tests', '');
+  const testsEditorRef = useRef(null);
+  const tests = collection.draft?.root ? get(collection, 'draft.root.request.tests', '') : get(collection, 'root.request.tests', '');
 
   const { displayedTheme } = useTheme();
   const preferences = useSelector((state) => state.app.preferences);
+  const [testsScroll, setTestsScroll] = usePersistedState({ key: `collection-tests-scroll-${collection.uid}`, default: 0 });
 
   const onEdit = (value) => {
     dispatch(
@@ -23,27 +28,39 @@ const Tests = ({ collection }) => {
     );
   };
 
-  const handleSave = () => dispatch(saveCollectionRoot(collection.uid));
+  const handleSave = () => dispatch(saveCollectionSettings(collection.uid));
+
+  useFocusErrorLine({
+    uid: collection.uid,
+    editorRef: testsEditorRef,
+    scriptPhase: 'test'
+  });
 
   return (
     <StyledWrapper className="w-full flex flex-col h-full">
       <div className="text-xs mb-4 text-muted">These tests will run any time a request in this collection is sent.</div>
-      <CodeEditor
-        collection={collection}
-        value={tests || ''}
-        theme={displayedTheme}
-        onEdit={onEdit}
-        mode="javascript"
-        onSave={handleSave}
-        font={get(preferences, 'font.codeFont', 'default')}
-        fontSize={get(preferences, 'font.codeFontSize')}
-        showHintsFor={['req', 'res', 'bru']}
-      />
+      <div className="relative h-full">
+        <CodeEditor
+          ref={testsEditorRef}
+          collection={collection}
+          docKey="collection-tests"
+          value={tests || ''}
+          theme={displayedTheme}
+          onEdit={onEdit}
+          mode="javascript"
+          onSave={handleSave}
+          font={get(preferences, 'font.codeFont', 'default')}
+          fontSize={get(preferences, 'font.codeFontSize')}
+          showHintsFor={['req', 'res', 'bru']}
+          initialScroll={testsScroll}
+          onScroll={setTestsScroll}
+        />
+      </div>
 
       <div className="mt-6">
-        <button type="submit" className="submit btn btn-sm btn-secondary" onClick={handleSave}>
+        <Button type="submit" size="sm" onClick={handleSave}>
           Save
-        </button>
+        </Button>
       </div>
     </StyledWrapper>
   );

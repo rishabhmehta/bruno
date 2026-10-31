@@ -1,29 +1,35 @@
 import React, { useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
-import { 
+import {
   IconX,
   IconFileText,
   IconArrowRight,
   IconNetwork
 } from '@tabler/icons';
 import { clearSelectedRequest } from 'providers/ReduxStore/slices/logs';
-import QueryResult from 'components/ResponsePane/QueryResult';
+import QueryResponse from 'components/ResponsePane/QueryResponse/index';
 import Network from 'components/ResponsePane/Timeline/TimelineItem/Network';
+import { sentHeadersFromTimeline } from 'utils/timeline';
 import StyledWrapper from './StyledWrapper';
 import { uuid } from 'utils/common/index';
 
-const RequestTab = ({ request, response }) => {
-  const formatHeaders = (headers) => {
-    if (!headers) return [];
-    if (Array.isArray(headers)) return headers;
-    return Object.entries(headers).map(([key, value]) => ({ name: key, value }));
-  };
+const formatHeaders = (headers) => {
+  if (!headers) return [];
+  if (Array.isArray(headers)) return headers;
+  return Object.entries(headers).map(([key, value]) => ({ name: key, value }));
+};
 
-  const formatBody = (body) => {
-    if (!body) return 'No body';
-    if (typeof body === 'string') return body;
-    return JSON.stringify(body, null, 2);
-  };
+const formatBody = (body) => {
+  if (!body) return 'No body';
+  if (typeof body === 'string') return body;
+  return JSON.stringify(body, null, 2);
+};
+
+const RequestTab = ({ request, response }) => {
+  const sentHeaders = sentHeadersFromTimeline(response?.timeline);
+  /** In case of `bru.sendRequest` it builds its own entry in timeline,
+   * so to show the headers sent in new request we need headers not sentHeaders */
+  const headers = sentHeaders.length ? sentHeaders : formatHeaders(request?.headers);
 
   return (
     <div className="tab-content">
@@ -43,8 +49,8 @@ const RequestTab = ({ request, response }) => {
 
       <div className="section">
         <h4>Request Headers</h4>
-        {formatHeaders(request?.headers).length > 0 ? (
-          <div className="headers-table">
+        {headers.length > 0 ? (
+          <div className="headers-table" data-testid="request-details-request-headers">
             <table>
               <thead>
                 <tr>
@@ -53,10 +59,10 @@ const RequestTab = ({ request, response }) => {
                 </tr>
               </thead>
               <tbody>
-                {formatHeaders(request.headers).map((header, index) => (
-                  <tr key={index}>
-                    <td className="header-name">{header.name}</td>
-                    <td className="header-value">{header.value}</td>
+                {headers.map((header, index) => (
+                  <tr key={index} data-testid="request-details-header-row">
+                    <td className="header-name" data-testid="request-details-header-name">{header.name}</td>
+                    <td className="header-value" data-testid="request-details-header-value">{header.value}</td>
                   </tr>
                 ))}
               </tbody>
@@ -78,12 +84,6 @@ const RequestTab = ({ request, response }) => {
 };
 
 const ResponseTab = ({ response, request, collection }) => {
-  const formatHeaders = (headers) => {
-    if (!headers) return [];
-    if (Array.isArray(headers)) return headers;
-    return Object.entries(headers).map(([key, value]) => ({ name: key, value }));
-  };
-
   return (
     <div className="tab-content">
       <div className="section">
@@ -116,8 +116,8 @@ const ResponseTab = ({ response, request, collection }) => {
         <h4>Response Body</h4>
         <div className="response-body-container">
           {response?.data || response?.dataBuffer ? (
-            <QueryResult
-              item={{ uid:  uuid()}}
+            <QueryResponse
+              item={{ uid: uuid() }}
               collection={collection}
               data={response.data}
               dataBuffer={response.dataBuffer}
@@ -141,7 +141,7 @@ const NetworkTab = ({ response }) => {
     <div className="tab-content">
       <div className="section">
         <h4>Network Logs</h4>
-        <div className="network-logs-container">
+        <div className="network-logs-wrapper">
           {timeline.length > 0 ? (
             <Network logs={timeline} />
           ) : (
@@ -155,8 +155,8 @@ const NetworkTab = ({ response }) => {
 
 const RequestDetailsPanel = () => {
   const dispatch = useDispatch();
-  const { selectedRequest } = useSelector(state => state.logs);
-  const collections = useSelector(state => state.collections.collections);
+  const { selectedRequest } = useSelector((state) => state.logs);
+  const collections = useSelector((state) => state.collections.collections);
   const [activeTab, setActiveTab] = useState('request');
 
   if (!selectedRequest) return null;
@@ -164,7 +164,7 @@ const RequestDetailsPanel = () => {
   const { data } = selectedRequest;
   const { request, response } = data;
 
-  const collection = collections.find(c => c.uid === selectedRequest.collectionUid);
+  const collection = collections.find((c) => c.uid === selectedRequest.collectionUid);
 
   const handleClose = () => {
     dispatch(clearSelectedRequest());
@@ -196,8 +196,8 @@ const RequestDetailsPanel = () => {
           <span>Request Details</span>
           <span className="request-time">({formatTime(selectedRequest.timestamp)})</span>
         </div>
-        
-        <button 
+
+        <button
           className="close-button"
           onClick={handleClose}
           title="Close details panel"
@@ -207,24 +207,26 @@ const RequestDetailsPanel = () => {
       </div>
 
       <div className="panel-tabs">
-        <button 
+        <button
           className={`tab-button ${activeTab === 'request' ? 'active' : ''}`}
+          data-testid="request-details-tab"
           onClick={() => setActiveTab('request')}
         >
           <IconArrowRight size={14} strokeWidth={1.5} />
           Request
         </button>
-        
-        <button 
+
+        <button
           className={`tab-button ${activeTab === 'response' ? 'active' : ''}`}
           onClick={() => setActiveTab('response')}
         >
           <IconFileText size={14} strokeWidth={1.5} />
           Response
         </button>
-        
-        <button 
+
+        <button
           className={`tab-button ${activeTab === 'network' ? 'active' : ''}`}
+          data-testid="network-details-tab"
           onClick={() => setActiveTab('network')}
         >
           <IconNetwork size={14} strokeWidth={1.5} />
@@ -239,4 +241,4 @@ const RequestDetailsPanel = () => {
   );
 };
 
-export default RequestDetailsPanel; 
+export default RequestDetailsPanel;

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import Modal from 'components/Modal';
 import Portal from 'components/Portal';
 
-const CreateExampleModal = ({ isOpen, onClose, onSave, title = 'Create Response Example', initialName = '' }) => {
+const CreateExampleModal = ({ isOpen, onClose, onSave, title = 'Create Response Example', initialName = '', confirmText = 'Create Example' }) => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [nameError, setNameError] = useState('');
@@ -54,13 +54,14 @@ const CreateExampleModal = ({ isOpen, onClose, onSave, title = 'Create Response 
         title={title}
         handleCancel={handleClose}
         handleConfirm={handleConfirm}
-        confirmText="Create Example"
+        confirmText={confirmText}
         cancelText="Cancel"
         isOpen={isOpen}
+        dataTestId="create-example-modal"
       >
         <div className="space-y-4">
           <div>
-            <label htmlFor="exampleName" className="block font-semibold">
+            <label htmlFor="exampleName" className="block font-medium">
               Example Name<span className="text-red-600">*</span>
             </label>
             <input
@@ -74,14 +75,14 @@ const CreateExampleModal = ({ isOpen, onClose, onSave, title = 'Create Response 
               data-testid="create-example-name-input"
             />
             {nameError && (
-              <div className="text-red-500 text-sm mt-1" data-testid="name-error">
+              <div className="text-red-500 mt-1" data-testid="name-error">
                 {nameError}
               </div>
             )}
           </div>
 
           <div>
-            <label htmlFor="exampleDescription" className="block font-semibold">
+            <label htmlFor="exampleDescription" className="block font-medium">
               Description
             </label>
             <textarea

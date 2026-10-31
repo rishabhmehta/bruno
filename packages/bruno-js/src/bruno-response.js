@@ -1,5 +1,6 @@
 const { get } = require('@usebruno/query');
 const _ = require('lodash');
+const HeaderList = require('./header-list');
 
 class BrunoResponse {
   constructor(res) {
@@ -10,6 +11,9 @@ class BrunoResponse {
     this.body = res ? res.data : null;
     this.responseTime = res ? res.responseTime : null;
     this.url = res?.request ? res.request.protocol + '//' + res.request.host + res.request.path : null;
+
+    // HeaderList in static read-only mode — write methods throw
+    this.headerList = new HeaderList(res, { writable: false });
 
     // Make the instance callable
     const callable = (...args) => get(this.body, ...args);
@@ -28,7 +32,10 @@ class BrunoResponse {
   }
 
   getHeader(name) {
-    return this.res && this.res.headers ? this.res.headers[name] : null;
+    if (typeof name !== 'string' || !this.res?.headers) {
+      return null;
+    }
+    return this.res.headers[name.toLowerCase()];
   }
 
   getHeaders() {
@@ -55,6 +62,20 @@ class BrunoResponse {
     const clonedData = _.cloneDeep(data);
     this.res.data = clonedData;
     this.body = clonedData;
+
+    // Update dataBuffer to match the modified body
+    if (clonedData === null || clonedData === undefined) {
+      this.res.dataBuffer = Buffer.from('');
+    } else if (typeof clonedData === 'string') {
+      this.res.dataBuffer = Buffer.from(clonedData);
+    } else {
+      // For objects, stringify them
+      try {
+        this.res.dataBuffer = Buffer.from(JSON.stringify(clonedData));
+      } catch (e) {
+        this.res.dataBuffer = Buffer.from('');
+      }
+    }
   }
 
   // TODO: Refactor: dataBuffer size calculation should be handled in a shared utility so it can be passed and reused across the application
@@ -65,7 +86,7 @@ class BrunoResponse {
 
     const { data, dataBuffer, headers } = this.res;
     let bodySize = 0;
-    
+
     // Use raw received bytes
     if (Buffer.isBuffer(dataBuffer)) {
       bodySize = dataBuffer.length;
@@ -94,7 +115,6 @@ class BrunoResponse {
     const headerSize = Buffer.byteLength(headerLines.join('\r\n'));
 
     return { header: headerSize, body: bodySize, total: headerSize + bodySize };
-    
   }
 
   getDataBuffer() {

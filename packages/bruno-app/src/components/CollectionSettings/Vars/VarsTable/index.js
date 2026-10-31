@@ -1,161 +1,151 @@
-import React from 'react';
-import cloneDeep from 'lodash/cloneDeep';
-import { IconTrash } from '@tabler/icons';
-import { useDispatch } from 'react-redux';
+import React, { useCallback, useMemo } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import { useTheme } from 'providers/Theme';
-import { saveCollectionRoot } from 'providers/ReduxStore/slices/collections/actions';
-import SingleLineEditor from 'components/SingleLineEditor';
+import { saveCollectionSettings } from 'providers/ReduxStore/slices/collections/actions';
+import { updateTableColumnWidths } from 'providers/ReduxStore/slices/tabs';
+import MultiLineEditor from 'components/MultiLineEditor';
 import InfoTip from 'components/InfoTip';
+import DataTypeSelector from 'components/DataTypeSelector';
+import VarValueCell from 'components/VarValueCell';
+import SensitiveWarningPopover from 'components/SensitiveFieldWarning/SensitiveWarningPopover';
+import { valueToString } from '@usebruno/common/utils';
+import EditableTable from 'components/EditableTable';
+import { createDescriptionColumn } from 'components/EditableTable/descriptionColumn';
 import StyledWrapper from './StyledWrapper';
-import toast from 'react-hot-toast';
 import { variableNameRegex } from 'utils/common/regex';
-import {
-  addCollectionVar,
-  deleteCollectionVar,
-  updateCollectionVar
-} from 'providers/ReduxStore/slices/collections/index';
+import { getAllVariables } from 'utils/collections';
+import { findUsedVarsRowUids, plainVariableUsageWarning } from 'utils/sensitive-fields';
+import { setCollectionVars, moveCollectionVar } from 'providers/ReduxStore/slices/collections/index';
+import { AUTOCOMPLETE_TRIGGER } from 'utils/common/constants';
 
-const VarsTable = ({ collection, vars, varType }) => {
+const VarsTable = ({ collection, vars, varType, initialScroll = 0, isDraft }) => {
   const dispatch = useDispatch();
   const { storedTheme } = useTheme();
+  const tabs = useSelector((state) => state.tabs.tabs);
+  const activeTabUid = useSelector((state) => state.tabs.activeTabUid);
 
-  const addVar = () => {
-    dispatch(
-      addCollectionVar({
-        collectionUid: collection.uid,
-        type: varType
-      })
-    );
+  // Get column widths from Redux
+  const focusedTab = tabs?.find((t) => t.uid === activeTabUid);
+  const collectionVarsWidths = focusedTab?.tableColumnWidths?.['collection-vars'] || {};
+
+  const handleColumnWidthsChange = (tableId, widths) => {
+    dispatch(updateTableColumnWidths({ uid: activeTabUid, tableId, widths }));
   };
 
-  const onSave = () => dispatch(saveCollectionRoot(collection.uid));
-  const handleVarChange = (e, v, type) => {
-    const _var = cloneDeep(v);
-    switch (type) {
-      case 'name': {
-        const value = e.target.value;
+  const onSave = () => dispatch(saveCollectionSettings(collection.uid));
 
-        if (variableNameRegex.test(value) === false) {
-          toast.error(
-            'Variable contains invalid characters! Variables must only contain alpha-numeric characters, "-", "_", "."'
-          );
-          return;
-        }
+  const resolvableVariables = useMemo(() => getAllVariables(collection), [collection]);
+  const usedVariableUids = useMemo(
+    () => (varType === 'request' ? findUsedVarsRowUids(collection, 'collection') : new Set()),
+    [collection, varType]
+  );
 
-        _var.name = value;
-        break;
-      }
-      case 'value': {
-        _var.value = e.target.value;
-        break;
-      }
-      case 'enabled': {
-        _var.enabled = e.target.checked;
-        break;
-      }
+  const handleVarsChange = useCallback((updatedVars) => {
+    dispatch(setCollectionVars({ collectionUid: collection.uid, vars: updatedVars, type: varType }));
+  }, [dispatch, collection.uid, varType]);
+
+  const handleReorder = useCallback(({ updateReorderedItem }) => {
+    dispatch(moveCollectionVar({ type: varType, collectionUid: collection.uid, updateReorderedItem }));
+  }, [dispatch, varType, collection.uid]);
+
+  const getRowError = useCallback((row, index, key) => {
+    if (key !== 'name') return null;
+    if (!row.name || row.name.trim() === '') return null;
+    if (!variableNameRegex.test(row.name)) {
+      return 'Variable contains invalid characters. Must only contain alphanumeric characters, "-", "_", "."';
     }
-    dispatch(
-      updateCollectionVar({
-        type: varType,
-        var: _var,
-        collectionUid: collection.uid
-      })
-    );
-  };
+    return null;
+  }, []);
 
-  const handleRemoveVar = (_var) => {
-    dispatch(
-      deleteCollectionVar({
-        type: varType,
-        varUid: _var.uid,
-        collectionUid: collection.uid
-      })
-    );
+  const descriptionColumn = createDescriptionColumn({
+    theme: storedTheme,
+    onSave,
+    collection,
+    nameFromRowIndex: true
+  });
+
+  const columns = [
+    {
+      key: 'name',
+      name: 'Name',
+      isKeyField: true,
+      sortable: true,
+      placeholder: 'Name',
+      width: '25%'
+    },
+    {
+      key: 'value',
+      name: varType === 'request' ? 'Value' : (
+        <div className="flex items-center">
+          <span>Expr</span>
+          <InfoTip content="You can write any valid JS Template Literal here" infotipId={`collection-${varType}-var`} />
+        </div>
+      ),
+      placeholder: varType === 'request' ? 'Value' : 'Expr',
+      render: ({ row, value, onChange, isLastEmptyRow, rowIndex }) => (
+        <VarValueCell
+          editor={(
+            <MultiLineEditor
+              value={valueToString(value)}
+              name={`${rowIndex}.value`}
+              theme={storedTheme}
+              onSave={onSave}
+              onChange={onChange}
+              collection={collection}
+              placeholder={value == null || (typeof value === 'string' && value.trim() === '') ? (varType === 'request' ? 'Value' : 'Expr') : ''}
+              variableAutocomplete={AUTOCOMPLETE_TRIGGER.DOUBLE_BRACE}
+            />
+          )}
+          renderTypeSelector={!isLastEmptyRow && varType === 'request'
+            ? ({ compact }) => (
+                <DataTypeSelector
+                  compact={compact}
+                  variable={row}
+                  theme={storedTheme}
+                  resolvableVariables={resolvableVariables}
+                  onChange={(fields) => {
+                    const updated = (vars || []).map((v) => v.uid === row.uid ? { ...v, ...fields } : v);
+                    handleVarsChange(updated);
+                  }}
+                />
+              )
+            : null}
+          leadingContent={!isLastEmptyRow && usedVariableUids.has(row.uid) ? (
+            <SensitiveWarningPopover fieldName={row.name} warningMessage={plainVariableUsageWarning(row.name)} scope="collection" variableName={row.name} value={row.value} collection={collection} variableUid={row.uid} />
+          ) : null}
+        />
+      )
+    },
+    descriptionColumn
+  ];
+
+  const defaultRow = {
+    name: '',
+    value: '',
+    description: '',
+    ...(varType === 'response' ? { local: false } : {})
   };
 
   return (
     <StyledWrapper className="w-full">
-      <table>
-        <thead>
-          <tr>
-            <td>Name</td>
-            {varType === 'request' ? (
-              <td>
-                <div className="flex items-center">
-                  <span>Value</span>
-                </div>
-              </td>
-            ) : (
-              <td>
-                <div className="flex items-center">
-                  <span>Expr</span>
-                  <InfoTip content="You can write any valid JS Template Literal here" infotipId="request-var" />
-                </div>
-              </td>
-            )}
-            <td></td>
-          </tr>
-        </thead>
-        <tbody>
-          {vars && vars.length
-            ? vars.map((_var) => {
-                return (
-                  <tr key={_var.uid}>
-                    <td>
-                      <input
-                        type="text"
-                        autoComplete="off"
-                        autoCorrect="off"
-                        autoCapitalize="off"
-                        spellCheck="false"
-                        value={_var.name}
-                        className="mousetrap"
-                        onChange={(e) => handleVarChange(e, _var, 'name')}
-                      />
-                    </td>
-                    <td>
-                      <SingleLineEditor
-                        value={_var.value}
-                        theme={storedTheme}
-                        onSave={onSave}
-                        onChange={(newValue) =>
-                          handleVarChange(
-                            {
-                              target: {
-                                value: newValue
-                              }
-                            },
-                            _var,
-                            'value'
-                          )
-                        }
-                        collection={collection}
-                      />
-                    </td>
-                    <td>
-                      <div className="flex items-center">
-                        <input
-                          type="checkbox"
-                          checked={_var.enabled}
-                          tabIndex="-1"
-                          className="mr-3 mousetrap"
-                          onChange={(e) => handleVarChange(e, _var, 'enabled')}
-                        />
-                        <button tabIndex="-1" onClick={() => handleRemoveVar(_var)}>
-                          <IconTrash strokeWidth={1.5} size={20} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })
-            : null}
-        </tbody>
-      </table>
-      <button className="btn-add-var text-link pr-2 py-3 mt-2 select-none" onClick={addVar}>
-        + Add
-      </button>
+      <EditableTable
+        tableId="collection-vars"
+        testId={`collection-vars-${varType === 'response' ? 'res' : 'req'}`}
+        columns={columns}
+        rows={vars || []}
+        onChange={handleVarsChange}
+        reorderable
+        onReorder={handleReorder}
+        sortStorageKey={`collection-vars-sort::${collection.uid}::${varType}`}
+        isDraft={isDraft}
+        defaultRow={defaultRow}
+        getRowError={getRowError}
+        columnWidths={collectionVarsWidths}
+        onColumnWidthsChange={(widths) => handleColumnWidthsChange('collection-vars', widths)}
+        initialScroll={initialScroll}
+      />
     </StyledWrapper>
   );
 };
+
 export default VarsTable;

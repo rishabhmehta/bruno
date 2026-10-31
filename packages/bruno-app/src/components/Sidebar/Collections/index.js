@@ -1,127 +1,163 @@
-import React, { useState } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
-import {
-  IconSearch,
-  IconFolders,
-  IconArrowsSort,
-  IconSortAscendingLetters,
-  IconSortDescendingLetters,
-  IconX
-} from '@tabler/icons';
-import Collection from './Collection';
-import CreateCollection from '../CreateCollection';
+import React, { useState, useMemo, useRef } from 'react';
+import { useSelector, useDispatch } from 'react-redux';
+import { Virtuoso } from 'react-virtuoso';
 import StyledWrapper from './StyledWrapper';
 import CreateOrOpenCollection from './CreateOrOpenCollection';
-import { sortCollections } from 'providers/ReduxStore/slices/collections/actions';
+import CollectionSearch from './CollectionSearch/index';
+import InlineCollectionCreator from './InlineCollectionCreator';
+import SidebarRow from './SidebarRow';
+import { clearSidebarSelection } from 'providers/ReduxStore/slices/collections';
+import { buildSidebarEntries, getSelectionInfo } from 'utils/collections/index';
+import { flattenSidebarTree } from 'utils/collections/flattenSidebarTree';
+import { CollectionItemDragPreview } from './Collection/CollectionItem/CollectionItemDragPreview';
+import useBulkActionsMenu from 'hooks/useBulkActionsMenu';
+import useDebounce from 'hooks/useDebounce';
+import useSidebarAutoReveal from 'hooks/useSidebarAutoReveal';
+import BulkActionsMenu from 'components/Sidebar/Collections/BulkActionsMenu';
+import { selectCollections, selectCollectionSortOrder, selectSelectedSidebarUids } from 'src/selectors/collections';
 
-// todo: move this to a separate folder
-// the coding convention is to keep all the components in a folder named after the component
-const CollectionsBadge = () => {
-  const dispatch = useDispatch();
-  const { collections } = useSelector((state) => state.collections);
-  const { collectionSortOrder } = useSelector((state) => state.collections);
-  const sortCollectionOrder = () => {
-    let order;
-    switch (collectionSortOrder) {
-      case 'default':
-        order = 'alphabetical';
-        break;
-      case 'alphabetical':
-        order = 'reverseAlphabetical';
-        break;
-      case 'reverseAlphabetical':
-        order = 'default';
-        break;
-    }
-    dispatch(sortCollections({ order }));
-  };
-  return (
-    <div className="items-center mt-2 relative">
-      <div className="collections-badge flex items-center justify-between px-2">
-        <div className="flex items-center  py-1 select-none">
-          <span className="mr-2">
-            <IconFolders size={18} strokeWidth={1.5} />
-          </span>
-          <span>Collections</span>
-        </div>
-        {collections.length >= 1 && (
-          <button onClick={() => sortCollectionOrder()}>
-            {collectionSortOrder == 'default' ? (
-              <IconArrowsSort size={18} strokeWidth={1.5} />
-            ) : collectionSortOrder == 'alphabetical' ? (
-              <IconSortAscendingLetters size={18} strokeWidth={1.5} />
-            ) : (
-              <IconSortDescendingLetters size={18} strokeWidth={1.5} />
-            )}
-          </button>
-        )}
-      </div>
-    </div>
-  );
-};
+const isEmptyQuery = (value) => typeof value === 'string' && value.trim() === '';
 
-const Collections = () => {
+const Collections = ({ showSearch, isCreatingCollection, onCreateClick, onDismissCreate, onOpenAdvancedCreate }) => {
   const [searchText, setSearchText] = useState('');
-  const { collections } = useSelector((state) => state.collections);
-  const [createCollectionModalOpen, setCreateCollectionModalOpen] = useState(false);
+  const trimmedSearchText = searchText.trim();
+  const debouncedSearchText = useDebounce(trimmedSearchText, 300, { shouldSkipDebounce: isEmptyQuery });
+  const collections = useSelector(selectCollections);
+  const collectionSortOrder = useSelector(selectCollectionSortOrder);
+  const selectedSidebarUids = useSelector(selectSelectedSidebarUids);
+  const workspaces = useSelector((state) => state.workspaces.workspaces);
+  const activeWorkspaceUid = useSelector((state) => state.workspaces.activeWorkspaceUid);
+  const dispatch = useDispatch();
+  const virtuosoRef = useRef(null);
+  const scrollerRef = useRef(null);
 
-  if (!collections || !collections.length) {
+  const { openBulkMenu, menuProps } = useBulkActionsMenu();
+
+  const activeWorkspace = workspaces.find((w) => w.uid === activeWorkspaceUid) || workspaces.find((w) => w.type === 'default');
+
+  // Build the sidebar list in workspace.yml order. Each entry is either a fully
+  // loaded collection (rendered via <Collection />) or, for non-default workspaces,
+  // a "ghost" git-backed entry whose local folder is missing (rendered via
+  // <GitRemoteCollectionRow /> so the user can click to clone it).
+  const sidebarEntries = useMemo(
+    () => buildSidebarEntries({ collections, workspaces, activeWorkspace, collectionSortOrder }),
+    [activeWorkspace, collections, workspaces, collectionSortOrder]
+  );
+
+  // Flatten the tree into ordered rows. itemsByUid / collectionsByUid resolve a row's live object.
+  const { rows, itemsByUid, collectionsByUid, rowIndexByItemUid, rowIndexByCollectionUid } = useMemo(
+    () => flattenSidebarTree(sidebarEntries, { searchText: debouncedSearchText }),
+    [sidebarEntries, debouncedSearchText]
+  );
+
+  // Ghost rows carry only path/name. GitRemoteCollectionRow needs the full entry (for `remote`).
+  const ghostsByPath = useMemo(() => {
+    const map = new Map();
+    for (const entry of sidebarEntries) {
+      if (entry.kind === 'ghost' && entry.entry?.path) map.set(entry.entry.path, entry.entry);
+    }
+    return map;
+  }, [sidebarEntries]);
+
+  // Multi-select drag context, computed once for the whole list and threaded to rows via SidebarRow.
+  const selectionInfo = useMemo(
+    () => (selectedSidebarUids.length > 1 ? getSelectionInfo({ collections, selectedUids: selectedSidebarUids }) : null),
+    [collections, selectedSidebarUids]
+  );
+
+  // A collection can't be dragged together with folders/requests/apps from inside it.
+  const hasMixedCollectionSelection = Boolean(
+    selectionInfo?.hasCollection
+    && (selectionInfo.hasFolder || selectionInfo.hasRequest || selectionInfo.hasApp)
+  );
+
+  // Whether a selected collection row can be dragged as part of the multi-selection.
+  const isCollectionMultiDragDisabled = !!selectionInfo && (selectionInfo.hasExample || hasMixedCollectionSelection);
+
+  // Whether a selected folder/request/app row can be dragged as part of the multi-selection.
+  const isItemMultiDragDisabled = !!selectionInfo && (selectionInfo.hasExample || selectionInfo.hasCollection);
+
+  const multiDragCollections = useMemo(() => {
+    if (!selectionInfo || selectionInfo.hasFolder || selectionInfo.hasRequest || selectionInfo.hasApp || selectionInfo.hasExample) return null;
+    return selectionInfo.effectiveSelection.filter((entry) => entry.type === 'collection').map((entry) => entry.collection);
+  }, [selectionInfo]);
+
+  const multiDragItems = useMemo(() => {
+    if (!selectionInfo || selectionInfo.hasCollection || selectionInfo.hasExample) return null;
+    return selectionInfo.effectiveSelection.map((entry) => ({ ...entry.item, sourceCollectionUid: entry.collectionUid }));
+  }, [selectionInfo]);
+
+  useSidebarAutoReveal({ rowIndexByItemUid, rowIndexByCollectionUid, sidebarEntries, virtuosoRef, scrollerRef });
+
+  // Clear multi-selection only when clicking the bare scroller background.
+  // The `contains` guard ignores events propagated from portaled menus/modals in <body>.
+  // The `[data-sidebar-row]` check covers all row types and inline menus/modals rendered within a row.
+  const handleContainerClick = (e) => {
+    if (!e.currentTarget.contains(e.target)) return;
+    if (e.target.closest('[data-sidebar-row]')) return;
+    dispatch(clearSidebarSelection());
+  };
+
+  if (!sidebarEntries.length) {
     return (
       <StyledWrapper>
-        <CollectionsBadge />
-        <CreateOrOpenCollection />
+        {isCreatingCollection && (
+          <InlineCollectionCreator
+            onComplete={onDismissCreate}
+            onCancel={onDismissCreate}
+            onOpenAdvanced={onOpenAdvancedCreate}
+          />
+        )}
+        {!isCreatingCollection && <CreateOrOpenCollection onCreateClick={onCreateClick} />}
       </StyledWrapper>
     );
   }
 
   return (
-    <StyledWrapper>
-      {createCollectionModalOpen ? <CreateCollection onClose={() => setCreateCollectionModalOpen(false)} /> : null}
+    <StyledWrapper data-testid="collections">
+      {showSearch && (
+        <CollectionSearch searchText={searchText} setSearchText={setSearchText} />
+      )}
 
-      <CollectionsBadge />
-
-      <div className="mt-4 relative collection-filter px-2">
-        <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-          <span className="text-gray-500 sm:text-sm">
-            <IconSearch size={16} strokeWidth={1.5} />
-          </span>
-        </div>
-        <input
-          type="text"
-          name="search"
-          placeholder="Search requests …"
-          id="search"
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="off"
-          spellCheck="false"
-          className="block w-full pl-7 py-1 sm:text-sm"
-          value={searchText}
-          onChange={(e) => setSearchText(e.target.value.toLowerCase())}
+      {isCreatingCollection && (
+        <InlineCollectionCreator
+          onComplete={onDismissCreate}
+          onCancel={onDismissCreate}
+          onOpenAdvanced={onOpenAdvancedCreate}
         />
-        {searchText !== '' && (
-          <div className="absolute inset-y-0 right-0 pr-4 flex items-center">
-            <span
-              className="close-icon"
-              onClick={() => {
-                setSearchText('');
-              }}
-            >
-              <IconX size={16} strokeWidth={1.5} className="cursor-pointer" />
-            </span>
-          </div>
-        )}
-      </div>
+      )}
 
-      <div className="mt-4 flex flex-col overflow-hidden hover:overflow-y-auto absolute top-32 bottom-0 left-0 right-0">
-        {collections && collections.length
-          ? collections.map((c) => {
-              return (
-                <Collection searchText={searchText} collection={c} key={c.uid} />
-              );
-            })
-          : null}
+      <div
+        className="collections-list flex flex-col flex-1 overflow-hidden"
+        onClick={handleContainerClick}
+      >
+        <Virtuoso
+          ref={virtuosoRef}
+          scrollerRef={(el) => { scrollerRef.current = el; }}
+          data-testid="sidebar-collections-scroller"
+          style={{ height: '100%' }}
+          data={rows}
+          computeItemKey={(_, row) => row.id}
+          defaultItemHeight={26}
+          increaseViewportBy={{ top: 400, bottom: 600 }}
+          itemContent={(_, row) => (
+            <SidebarRow
+              row={row}
+              searchText={debouncedSearchText}
+              openBulkMenu={openBulkMenu}
+              itemsByUid={itemsByUid}
+              collectionsByUid={collectionsByUid}
+              ghostsByPath={ghostsByPath}
+              isCollectionMultiDragDisabled={isCollectionMultiDragDisabled}
+              isItemMultiDragDisabled={isItemMultiDragDisabled}
+              multiDragCollections={multiDragCollections}
+              multiDragItems={multiDragItems}
+            />
+          )}
+        />
       </div>
+      <CollectionItemDragPreview />
+      <BulkActionsMenu menuProps={menuProps} />
     </StyledWrapper>
   );
 };

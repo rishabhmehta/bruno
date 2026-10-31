@@ -1,6 +1,3 @@
-import cloneDeep from 'lodash/cloneDeep';
-import { resolvePath } from 'utils/filesystem';
-
 export const sendNetworkRequest = async (item, collection, environment, runtimeVariables) => {
   return new Promise((resolve, reject) => {
     if (['http-request', 'graphql-request'].includes(item.type)) {
@@ -8,8 +5,9 @@ export const sendNetworkRequest = async (item, collection, environment, runtimeV
         .then((response) => {
           // if there is an error, we return the response object as is
           if (response?.error) {
-            resolve(response)
+            resolve(response);
           }
+
           resolve({
             state: 'success',
             data: response.data,
@@ -20,7 +18,9 @@ export const sendNetworkRequest = async (item, collection, environment, runtimeV
             status: response.status,
             statusText: response.statusText,
             duration: response.duration,
-            timeline: response.timeline
+            timeline: response.timeline,
+            stream: response.stream,
+            requestSent: response.requestSent
           });
         })
         .catch((err) => reject(err));
@@ -31,19 +31,17 @@ export const sendNetworkRequest = async (item, collection, environment, runtimeV
 export const sendGrpcRequest = async (item, collection, environment, runtimeVariables) => {
   return new Promise((resolve, reject) => {
     startGrpcRequest(item, collection, environment, runtimeVariables)
-        .then((initialState) => {
-          // Return an initial state object to update the UI
-          // The real response data will be handled by event listeners
-          resolve({
-            ...initialState,
-            timeline: []
-          });
-        })
-        .catch((err) => reject(err));
+      .then((initialState) => {
+        // Return an initial state object to update the UI
+        // The real response data will be handled by event listeners
+        resolve({
+          ...initialState,
+          timeline: []
+        });
+      })
+      .catch((err) => reject(err));
   });
-}
-
-
+};
 
 const sendHttpRequest = async (item, collection, environment, runtimeVariables) => {
   return new Promise((resolve, reject) => {
@@ -83,19 +81,19 @@ export const startGrpcRequest = async (item, collection, environment, runtimeVar
   return new Promise((resolve, reject) => {
     const { ipcRenderer } = window;
     const request = item.draft ? item.draft : item;
-    
+
     ipcRenderer.invoke('grpc:start-connection', {
-      request, 
-      collection, 
-      environment, 
+      request,
+      collection,
+      environment,
       runtimeVariables
     })
-    .then(() => {
-      resolve();
-    })
-    .catch(err => {
-      reject(err);
-    });
+      .then(() => {
+        resolve();
+      })
+      .catch((err) => {
+        reject(err);
+      });
   });
 };
 
@@ -143,25 +141,10 @@ export const endGrpcStream = async (requestId) => {
 };
 
 export const loadGrpcMethodsFromProtoFile = async (filePath, collection = null) => {
-  return new Promise(async (resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const { ipcRenderer } = window;
 
-    // Extract import paths from collection's gRPC config if available
-    let importPaths = [];
-
-    if (collection) {
-      const config = cloneDeep(collection.brunoConfig);
-
-      if (config.protobuf && config.protobuf.importPaths) {
-        // Use Promise.all to wait for all resolvePath calls to complete
-        const enabledImportPaths = config.protobuf.importPaths.filter((importPath) => importPath.enabled);
-        importPaths = await Promise.all(enabledImportPaths.map((importPath) => {
-          return resolvePath(importPath.path, collection.pathname);
-        }));
-      }
-    }
-
-    ipcRenderer.invoke('grpc:load-methods-proto', { filePath, includeDirs: importPaths }).then(resolve).catch(reject);
+    ipcRenderer.invoke('grpc:load-methods-proto', { filePath, collection }).then(resolve).catch(reject);
   });
 };
 
@@ -188,7 +171,7 @@ export const isGrpcConnectionActive = async (connectionId) => {
   return new Promise((resolve, reject) => {
     const { ipcRenderer } = window;
     ipcRenderer.invoke('grpc:is-connection-active', connectionId)
-      .then(response => {
+      .then((response) => {
         if (response.success) {
           resolve(response.isActive);
         } else {
@@ -197,7 +180,7 @@ export const isGrpcConnectionActive = async (connectionId) => {
           resolve(false);
         }
       })
-      .catch(err => {
+      .catch((err) => {
         console.error('Failed to check connection status:', err);
         // On error, assume the connection is not active
         resolve(false);
@@ -215,14 +198,14 @@ export const isGrpcConnectionActive = async (connectionId) => {
 export const generateGrpcSampleMessage = async (methodPath, existingMessage = null, options = {}) => {
   return new Promise((resolve, reject) => {
     const { ipcRenderer } = window;
-    
-    ipcRenderer.invoke('grpc:generate-sample-message', { 
-      methodPath, 
-      existingMessage, 
-      options 
+
+    ipcRenderer.invoke('grpc:generate-sample-message', {
+      methodPath,
+      existingMessage,
+      options
     })
-    .then(resolve)
-    .catch(reject);
+      .then(resolve)
+      .catch(reject);
   });
 };
 
@@ -241,25 +224,58 @@ export const connectWS = async (item, collection, environment, runtimeVariables,
   });
 };
 
-export const sendWsRequest = (item, collection, environment, runtimeVariables) => {
-  return new Promise(async (resolve, reject) => {
-    const ensureConnection = async () => {
-      const connectionStatus = await isWsConnectionActive(item.uid);
-      if (!connectionStatus.isActive) {
-        await connectWS(item, collection, environment, runtimeVariables, { connectOnly: true });
-      }
-    };
-    const { request } = item.draft ? item.draft : item;
-    queueWsMessage(item, collection.uid, request.body.ws[0].content)
-      .then((initialState) => {
-        // Return an initial state object to update the UI
-        // The real response data will be handled by event listeners
-        resolve({
-          ...initialState
-        });
-      })
-      .catch((err) => reject(err));
-    await ensureConnection();
+/**
+ * Connect only when there is no live or in-flight socket.
+ * While CONNECTING, callers should just queueMessage — open flushes the queue.
+ * While DISCONNECTING, wait for close to finish then open a fresh connection.
+ */
+export const ensureWsConnection = async (item, collection, environment, runtimeVariables) => {
+  let { status } = await getWsConnectionStatus(item.uid);
+
+  if (status === 'disconnecting') {
+    await closeWsConnection(item.uid);
+    ({ status } = await getWsConnectionStatus(item.uid));
+  }
+
+  if (status === 'connected' || status === 'connecting') {
+    return;
+  }
+
+  await connectWS(item, collection, environment, runtimeVariables, { connectOnly: true });
+};
+
+export const sendWsRequest = async (item, collection, environment, runtimeVariables, selectedMessageIndex = 0) => {
+  await ensureWsConnection(item, collection, environment, runtimeVariables);
+
+  // Send only the selected message by index
+  const result = await queueWsMessage(item, collection, environment, runtimeVariables, selectedMessageIndex);
+
+  if (result.success) {
+    return {};
+  } else {
+    throw new Error(result.error || 'Failed to queue messages');
+  }
+};
+
+/**
+ * Queues a message to an existing WebSocket connection with variable interpolation
+ * @param {Object} item - The request item
+ * @param {Object} collection - The collection object
+ * @param {Object} environment - The environment variables
+ * @param {Object} runtimeVariables - The runtime variables
+ * @param {number} selectedMessageIndex - Index of the message to queue
+ * @returns {Promise<Object>} - The result of the queue operation
+ */
+export const queueWsMessage = async (item, collection, environment, runtimeVariables, selectedMessageIndex) => {
+  return new Promise((resolve, reject) => {
+    const { ipcRenderer } = window;
+    ipcRenderer.invoke('renderer:ws:queue-message', {
+      item,
+      collection,
+      environment,
+      runtimeVariables,
+      selectedMessageIndex
+    }).then(resolve).catch(reject);
   });
 };
 
@@ -284,20 +300,6 @@ export const startWsConnection = async (item, collection, environment, runtimeVa
       .catch((err) => {
         reject(err);
       });
-  });
-};
-
-/**
- * Sends a message to an existing WebSocket connection
- * @param {string} requestId - The request ID to send a message to
- * @param {string} collectionUid - The collection ID the message is for
- * @param {*} message - The message
- * @returns {Promise<Object>} - The result of the send operation
- */
-export const queueWsMessage = async (item, collectionUid, message) => {
-  return new Promise((resolve, reject) => {
-    const { ipcRenderer } = window;
-    ipcRenderer.invoke('renderer:ws:queue-message', item.uid, collectionUid, message).then(resolve).catch(reject);
   });
 };
 
@@ -335,5 +337,17 @@ export const isWsConnectionActive = async (requestId) => {
   return new Promise((resolve, reject) => {
     const { ipcRenderer } = window;
     ipcRenderer.invoke('renderer:ws:is-connection-active', requestId).then(resolve).catch(reject);
+  });
+};
+
+/**
+ * Get the connection status of a WebSocket connection
+ * @param {string} requestId - The request ID to get the connection status of
+ * @returns {Promise<Object>} - The result of the get operation
+ */
+export const getWsConnectionStatus = async (requestId) => {
+  return new Promise((resolve, reject) => {
+    const { ipcRenderer } = window;
+    ipcRenderer.invoke('renderer:ws:connection-status', requestId).then(resolve).catch(reject);
   });
 };

@@ -1,36 +1,125 @@
-import React, { useCallback, useState, useRef, Fragment, useMemo } from 'react';
+import React, { useCallback, useState, useRef, Fragment, useMemo, useEffect } from 'react';
 import get from 'lodash/get';
-import { closeTabs, makeTabPermanent } from 'providers/ReduxStore/slices/tabs';
-import { saveRequest } from 'providers/ReduxStore/slices/collections/actions';
-import { deleteRequestDraft } from 'providers/ReduxStore/slices/collections';
+import { makeTabPermanent, syncTabUid } from 'providers/ReduxStore/slices/tabs';
+import { saveRequest, saveFolderRoot, saveEnvironment, saveCollectionSettings, closeTabs, saveFile } from 'providers/ReduxStore/slices/collections/actions';
+import useKeybinding from 'hooks/useKeybinding';
+import useKeybindingDisplayText from 'hooks/useKeybindingDisplayText';
+import { deleteRequestDraft, deleteCollectionDraft, deleteFolderDraft, clearEnvironmentsDraft, addSaveTransientRequestModal } from 'providers/ReduxStore/slices/collections';
+import { clearGlobalEnvironmentDraft } from 'providers/ReduxStore/slices/global-environments';
+import { saveGlobalEnvironment } from 'providers/ReduxStore/slices/global-environments';
 import { useTheme } from 'providers/Theme';
-import { useDispatch } from 'react-redux';
-import darkTheme from 'themes/dark';
-import lightTheme from 'themes/light';
-import { findItemInCollection, hasRequestChanges } from 'utils/collections';
+import { useDispatch, useSelector } from 'react-redux';
+import { findItemInCollection, findItemInCollectionByPathname, hasRequestChanges, areItemsLoading, isItemTransientRequest } from 'utils/collections';
+import { resolveNewRequestTarget } from './resolveNewRequestTarget';
 import ConfirmRequestClose from './ConfirmRequestClose';
+import ConfirmCollectionClose from './ConfirmCollectionClose';
+import ConfirmFolderClose from './ConfirmFolderClose';
+import ConfirmCloseEnvironment from 'components/Environments/ConfirmCloseEnvironment';
 import RequestTabNotFound from './RequestTabNotFound';
+import RequestTabLoading from './RequestTabLoading';
 import SpecialTab from './SpecialTab';
+import { IconAppWindow } from '@tabler/icons';
 import StyledWrapper from './StyledWrapper';
-import Dropdown from 'components/Dropdown';
+import MenuDropdown from 'ui/MenuDropdown';
 import CloneCollectionItem from 'components/Sidebar/Collections/Collection/CollectionItem/CloneCollectionItem/index';
 import NewRequest from 'components/Sidebar/NewRequest/index';
-import CloseTabIcon from './CloseTabIcon';
-import DraftTabIcon from './DraftTabIcon';
+import GradientCloseButton from './GradientCloseButton';
 import { flattenItems } from 'utils/collections/index';
 import { closeWsConnection } from 'utils/network/index';
+import { getInvalidVariableNames, invalidVariableNamesError } from 'utils/common/variables';
+import { isEnvironmentValidationError } from 'utils/environments';
 import ExampleTab from '../ExampleTab';
+import MockResponseTab from 'components/MockServer/RequestTabs/MockResponseTab';
+import ConfirmApiSpecClose from './ConfirmApiSpecClose';
+import { findApiSpecByPathname, hasUnsavedApiSpecChanges } from 'utils/api-specs';
+import { clearApiSpecDraft, saveApiSpecTabDraft } from 'providers/ReduxStore/slices/apiSpec';
+import toast from 'react-hot-toast';
 
-const RequestTab = ({ tab, collection, tabIndex, collectionRequestTabs, folderUid }) => {
+const RequestTab = ({ tab, collection, tabIndex, collectionRequestTabs, folderUid, hasOverflow, setHasOverflow, dropdownContainerRef }) => {
   const dispatch = useDispatch();
-  const { storedTheme } = useTheme();
-  const theme = storedTheme === 'dark' ? darkTheme : lightTheme;
+  const { theme } = useTheme();
+  const tabNameRef = useRef(null);
+  const tabLabelRef = useRef(null);
+  const lastOverflowStateRef = useRef(null);
   const [showConfirmClose, setShowConfirmClose] = useState(false);
+  const [showConfirmCollectionClose, setShowConfirmCollectionClose] = useState(false);
+  const [showConfirmFolderClose, setShowConfirmFolderClose] = useState(false);
+  const [showConfirmEnvironmentClose, setShowConfirmEnvironmentClose] = useState(false);
+  const [showConfirmGlobalEnvironmentClose, setShowConfirmGlobalEnvironmentClose] = useState(false);
+  const [showConfirmApiSpecClose, setShowConfirmApiSpecClose] = useState(false);
+  const [newRequestTarget, setNewRequestTarget] = useState(null);
 
-  const dropdownTippyRef = useRef();
-  const onDropdownCreate = (ref) => (dropdownTippyRef.current = ref);
+  const menuDropdownRef = useRef();
 
-  const item = findItemInCollection(collection, tab.uid);
+  let item = findItemInCollection(collection, tab.uid);
+  if (!item && tab.pathname) {
+    item = findItemInCollectionByPathname(collection, tab.pathname);
+  }
+
+  useEffect(() => {
+    const isRequestType = tab.type === 'request'
+      || tab.type === 'http-request'
+      || tab.type === 'graphql-request'
+      || tab.type === 'grpc-request'
+      || tab.type === 'ws-request';
+    const shouldSyncUid = isRequestType || tab.type === 'folder-settings';
+
+    if (!shouldSyncUid || !tab.pathname || !item?.uid || tab.uid === item.uid) {
+      return;
+    }
+
+    dispatch(syncTabUid({ oldUid: tab.uid, newUid: item.uid }));
+  }, [dispatch, item?.uid, tab.pathname, tab.type, tab.uid]);
+
+  const method = useMemo(() => {
+    if (!item) return;
+    switch (item.type) {
+      case 'grpc-request':
+        return 'gRPC';
+      case 'ws-request':
+        return 'WS';
+      case 'graphql-request':
+        return 'GQL';
+      default:
+        return item.draft ? get(item, 'draft.request.method') : get(item, 'request.method');
+    }
+  }, [item]);
+
+  const hasChanges = useMemo(() => hasRequestChanges(item), [item]);
+
+  const isItemsLoading = useMemo(() => {
+    return collection?.mountStatus === 'mounting' || areItemsLoading(collection);
+  }, [collection?.mountStatus, collection]);
+
+  const isWS = item?.type === 'ws-request';
+
+  useEffect(() => {
+    if (!item || !tabNameRef.current || !setHasOverflow) return;
+
+    const checkOverflow = () => {
+      if (tabNameRef.current && setHasOverflow) {
+        const hasOverflow = tabNameRef.current.scrollWidth > tabNameRef.current.clientWidth;
+        if (lastOverflowStateRef.current !== hasOverflow) {
+          lastOverflowStateRef.current = hasOverflow;
+          setHasOverflow(hasOverflow);
+        }
+      }
+    };
+
+    const timeoutId = setTimeout(checkOverflow, 0);
+    const resizeObserver = new ResizeObserver(() => {
+      checkOverflow();
+    });
+
+    if (tabNameRef.current) {
+      resizeObserver.observe(tabNameRef.current);
+    }
+
+    return () => {
+      clearTimeout(timeoutId);
+      resizeObserver.disconnect();
+    };
+  }, [item, item?.name, method, setHasOverflow]);
 
   const handleCloseClick = (event) => {
     event.stopPropagation();
@@ -42,16 +131,16 @@ const RequestTab = ({ tab, collection, tabIndex, collectionRequestTabs, folderUi
     );
   };
 
-  const handleRightClick = (_event) => {
-    const menuDropdown = dropdownTippyRef.current;
-    if (!menuDropdown) {
-      return;
-    }
+  const handleRightClick = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    menuDropdownRef.current?.show();
+  };
 
-    if (menuDropdown.state.isShown) {
-      menuDropdown.hide();
-    } else {
-      menuDropdown.show();
+  // Prevent the browser's autoscroll (triggered on middle-button mousedown)
+  const handleMouseDown = (e) => {
+    if (e.button === 1) {
+      e.preventDefault();
     }
   };
 
@@ -59,6 +148,11 @@ const RequestTab = ({ tab, collection, tabIndex, collectionRequestTabs, folderUi
     if (e.button === 1) {
       e.preventDefault();
       e.stopPropagation();
+
+      if (hasApiSpecDraft) {
+        setShowConfirmApiSpecClose(true);
+        return;
+      }
 
       // Close the tab
       dispatch(
@@ -77,17 +171,410 @@ const RequestTab = ({ tab, collection, tabIndex, collectionRequestTabs, folderUi
     return colorMap[method.toLocaleLowerCase()];
   };
 
-  const folder = folderUid ? findItemInCollection(collection, folderUid) : null;
-  if (['collection-settings', 'collection-overview', 'folder-settings', 'variables', 'collection-runner', 'security-settings'].includes(tab.type)) {
+  const handleCloseCollectionSettings = (event) => {
+    if (!collection.draft) {
+      return handleCloseClick(event);
+    }
+
+    event.stopPropagation();
+    event.preventDefault();
+    setShowConfirmCollectionClose(true);
+  };
+
+  let folder = folderUid ? findItemInCollection(collection, folderUid) : null;
+  if (!folder && tab.type === 'folder-settings' && tab.pathname) {
+    folder = findItemInCollectionByPathname(collection, tab.pathname);
+  }
+
+  const handleCloseFolderSettings = (event) => {
+    if (!folder?.draft) {
+      return handleCloseClick(event);
+    }
+
+    event.stopPropagation();
+    event.preventDefault();
+    setShowConfirmFolderClose(true);
+  };
+
+  const specialTabs = [
+    'collection-overview',
+    'collection-settings',
+    'folder-settings',
+    'variables',
+    'collection-runner',
+    'environment-settings',
+    'global-environment-settings',
+    'preferences',
+    'workspaceOverview',
+    'workspaceEnvironments',
+    'openapi-sync',
+    'openapi-spec',
+    'mock-server',
+    'changelog',
+    'api-spec'
+  ];
+
+  const hasDraft = tab.type === 'collection-settings' && collection?.draft;
+  const hasFolderDraft = tab.type === 'folder-settings' && folder?.draft;
+  const hasEnvironmentDraft = tab.type === 'environment-settings' && collection?.environmentsDraft;
+  const globalEnvironmentDraft = useSelector((state) => state.globalEnvironments.globalEnvironmentDraft);
+  const hasGlobalEnvironmentDraft = (tab.type === 'global-environment-settings' || tab.type === 'workspaceEnvironments') && globalEnvironmentDraft;
+
+  const apiSpec = useSelector((state) => (
+    tab.type === 'api-spec' ? findApiSpecByPathname(state.apiSpec.apiSpecs, tab.apiSpecPathname) : null
+  ));
+  const hasApiSpecDraft = hasUnsavedApiSpecChanges(apiSpec);
+  const apiSpecTabName = tab.tabName || apiSpec?.filename || apiSpec?.name;
+
+  const activeTabUid = useSelector((state) => state.tabs.activeTabUid);
+  const isActive = tab.uid === activeTabUid;
+  // Truthy only when a sidebar folder/collection is focused; those own the
+  // new-request shortcut (with folder targeting), so the tab handler yields to them.
+  const focusedSidebarPath = useSelector((state) => state.app.focusedSidebarPath);
+
+  // Close tab shortcut — draft-aware, only active for the focused tab
+  useKeybinding('closeTab', () => {
+    if (tab.type === 'request' || tab.type === 'http-request' || tab.type === 'grpc-request' || tab.type === 'ws-request' || tab.type === 'graphql-request') {
+      if (hasChanges) {
+        setShowConfirmClose(true);
+      } else {
+        if (item?.type === 'ws-request') {
+          closeWsConnection(item.uid);
+        }
+        dispatch(closeTabs({ tabUids: [tab.uid] }));
+      }
+    } else if (tab.type === 'collection-settings') {
+      if (collection?.draft) {
+        setShowConfirmCollectionClose(true);
+      } else {
+        dispatch(closeTabs({ tabUids: [tab.uid] }));
+      }
+    } else if (tab.type === 'folder-settings') {
+      if (folder?.draft) {
+        setShowConfirmFolderClose(true);
+      } else {
+        dispatch(closeTabs({ tabUids: [tab.uid] }));
+      }
+    } else if (tab.type === 'environment-settings') {
+      if (collection?.environmentsDraft) {
+        setShowConfirmEnvironmentClose(true);
+      } else {
+        dispatch(closeTabs({ tabUids: [tab.uid] }));
+      }
+    } else if (tab.type === 'global-environment-settings') {
+      if (globalEnvironmentDraft) {
+        setShowConfirmGlobalEnvironmentClose(true);
+      } else {
+        dispatch(closeTabs({ tabUids: [tab.uid] }));
+      }
+    } else if (tab.type === 'api-spec') {
+      if (hasApiSpecDraft) {
+        setShowConfirmApiSpecClose(true);
+      } else {
+        dispatch(closeTabs({ tabUids: [tab.uid] }));
+      }
+    } else {
+      dispatch(closeTabs({ tabUids: [tab.uid] }));
+    }
+    return false;
+  }, { enabled: isActive, deps: [isActive, tab, hasChanges, hasApiSpecDraft, item, collection, folder, globalEnvironmentDraft] });
+
+  const saveErrorHandler = (fallbackMessage) => (err) =>
+    toast.error(isEnvironmentValidationError(err) ? err.message : fallbackMessage);
+
+  // Save shortcut — tab-type-aware, only active for the focused tab
+  useKeybinding('save', () => {
+    if (tab.type === 'environment-settings') {
+      if (collection?.environmentsDraft) {
+        const { environmentUid, variables } = collection.environmentsDraft;
+        if (environmentUid?.startsWith('dotenv:')) {
+          window.dispatchEvent(new Event('dotenv-save'));
+        } else {
+          dispatch(saveEnvironment(variables, environmentUid, collection.uid))
+            .then(() => toast.success('Changes saved successfully'))
+            .catch(saveErrorHandler('Failed to save environment'));
+        }
+      }
+    } else if (tab.type === 'global-environment-settings' || tab.type === 'workspaceEnvironments') {
+      if (globalEnvironmentDraft) {
+        const { environmentUid, variables } = globalEnvironmentDraft;
+        if (environmentUid?.startsWith('dotenv:')) {
+          window.dispatchEvent(new Event('dotenv-save'));
+        } else {
+          dispatch(saveGlobalEnvironment({ variables, environmentUid }))
+            .then(() => toast.success('Changes saved successfully'))
+            .catch(saveErrorHandler('Failed to save global environment'));
+        }
+      }
+    } else if (tab.type === 'folder-settings') {
+      if (folder) {
+        dispatch(saveFolderRoot(collection.uid, folder.uid));
+      }
+    } else if (tab.type === 'collection-settings') {
+      dispatch(saveCollectionSettings(collection.uid));
+    } else if (tab.type === 'api-spec') {
+      dispatch(saveApiSpecTabDraft(tab.uid)).catch(() => {});
+    } else if (item && item.uid) {
+      if (hasChanges || isItemTransientRequest(item)) {
+        if (item.type === 'js' || collection.fileMode) {
+          dispatch(saveFile(item.draft?.raw ?? item.raw, tab.uid, tab.collectionUid));
+        } else {
+          dispatch(saveRequest(tab.uid, tab.collectionUid));
+        }
+      }
+    }
+    return false;
+  }, { enabled: isActive, deps: [isActive, tab, item, collection, folder, globalEnvironmentDraft] });
+
+  const openNewRequest = useCallback(() => {
+    const target = resolveNewRequestTarget({ tab, item, collection, folder });
+    if (target) {
+      setNewRequestTarget(target);
+    }
+  }, [tab, item, collection, folder]);
+
+  const isNewRequestShortcutEnabled = isActive && !focusedSidebarPath;
+
+  useKeybinding('newRequest', () => {
+    openNewRequest();
+    return false;
+  }, { enabled: isNewRequestShortcutEnabled, deps: [isActive, focusedSidebarPath, tab, item, collection, folder] });
+
+  const handleCloseEnvironmentSettings = (event) => {
+    if (!collection?.environmentsDraft) {
+      return handleCloseClick(event);
+    }
+
+    event.stopPropagation();
+    event.preventDefault();
+    setShowConfirmEnvironmentClose(true);
+  };
+
+  const handleCloseGlobalEnvironmentSettings = (event) => {
+    if (!globalEnvironmentDraft) {
+      return handleCloseClick(event);
+    }
+
+    event.stopPropagation();
+    event.preventDefault();
+    setShowConfirmGlobalEnvironmentClose(true);
+  };
+
+  const handleCloseApiSpec = (event) => {
+    if (!hasApiSpecDraft) {
+      return handleCloseClick(event);
+    }
+
+    event.stopPropagation();
+    event.preventDefault();
+    setShowConfirmApiSpecClose(true);
+  };
+
+  const newRequestModal = newRequestTarget ? (
+    <NewRequest
+      collectionUid={newRequestTarget.collectionUid}
+      item={newRequestTarget.item}
+      onClose={() => setNewRequestTarget(null)}
+    />
+  ) : null;
+
+  if (specialTabs.includes(tab.type)) {
     return (
       <StyledWrapper
-        className={`flex items-center justify-between tab-container px-1 ${tab.preview ? "italic" : ""}`}
-        onMouseUp={handleMouseUp} // Add middle-click behavior here
+        className={`flex items-center justify-between tab-container px-2 ${tab.preview ? 'italic' : ''}`}
+        data-testid={`request-tab-${tab.type}`}
+        onMouseDown={handleMouseDown}
+        onMouseUp={handleMouseUp}
       >
+        {showConfirmCollectionClose && tab.type === 'collection-settings' && (
+          <ConfirmCollectionClose
+            collection={collection}
+            onCancel={() => setShowConfirmCollectionClose(false)}
+            onCloseWithoutSave={() => {
+              dispatch(deleteCollectionDraft({
+                collectionUid: collection.uid
+              }));
+              dispatch(closeTabs({
+                tabUids: [tab.uid]
+              }));
+              setShowConfirmCollectionClose(false);
+            }}
+            onSaveAndClose={() => {
+              dispatch(saveCollectionSettings(collection.uid))
+                .then(() => {
+                  dispatch(closeTabs({
+                    tabUids: [tab.uid]
+                  }));
+                  setShowConfirmCollectionClose(false);
+                })
+                .catch((err) => {
+                  console.log('err', err);
+                });
+            }}
+          />
+        )}
+        {showConfirmFolderClose && tab.type === 'folder-settings' && (
+          <ConfirmFolderClose
+            folder={folder}
+            onCancel={() => setShowConfirmFolderClose(false)}
+            onCloseWithoutSave={() => {
+              dispatch(deleteFolderDraft({
+                collectionUid: collection.uid,
+                folderUid: folder.uid
+              }));
+              dispatch(closeTabs({
+                tabUids: [tab.uid]
+              }));
+              setShowConfirmFolderClose(false);
+            }}
+            onSaveAndClose={() => {
+              dispatch(saveFolderRoot(collection.uid, folder.uid))
+                .then(() => {
+                  dispatch(closeTabs({
+                    tabUids: [tab.uid]
+                  }));
+                  setShowConfirmFolderClose(false);
+                })
+                .catch((err) => {
+                  console.log('err', err);
+                });
+            }}
+          />
+        )}
+        {showConfirmEnvironmentClose && tab.type === 'environment-settings' && (
+          <ConfirmCloseEnvironment
+            isGlobal={false}
+            isDotEnv={collection.environmentsDraft?.environmentUid?.startsWith('dotenv:')}
+            onCancel={() => setShowConfirmEnvironmentClose(false)}
+            onCloseWithoutSave={() => {
+              dispatch(clearEnvironmentsDraft({ collectionUid: collection.uid }));
+              dispatch(closeTabs({ tabUids: [tab.uid] }));
+              setShowConfirmEnvironmentClose(false);
+            }}
+            onSaveAndClose={() => {
+              const draft = collection.environmentsDraft;
+              if (draft?.environmentUid?.startsWith('dotenv:')) {
+                const onSuccess = () => {
+                  cleanup();
+                  dispatch(clearEnvironmentsDraft({ collectionUid: collection.uid }));
+                  dispatch(closeTabs({ tabUids: [tab.uid] }));
+                  setShowConfirmEnvironmentClose(false);
+                };
+                const onFailed = () => {
+                  cleanup();
+                  setShowConfirmEnvironmentClose(false);
+                };
+                const cleanup = () => {
+                  window.removeEventListener('dotenv-save-complete', onSuccess);
+                  window.removeEventListener('dotenv-save-failed', onFailed);
+                };
+                window.addEventListener('dotenv-save-complete', onSuccess, { once: true });
+                window.addEventListener('dotenv-save-failed', onFailed, { once: true });
+                window.dispatchEvent(new Event('dotenv-save'));
+              } else if (draft?.environmentUid && draft?.variables) {
+                const invalidNames = getInvalidVariableNames(draft.variables);
+                if (invalidNames.length > 0) {
+                  toast.error(invalidVariableNamesError(invalidNames));
+                  return;
+                }
+                dispatch(saveEnvironment(draft.variables, draft.environmentUid, collection.uid))
+                  .then(() => {
+                    dispatch(clearEnvironmentsDraft({ collectionUid: collection.uid }));
+                    dispatch(closeTabs({ tabUids: [tab.uid] }));
+                    setShowConfirmEnvironmentClose(false);
+                    toast.success('Environment saved');
+                  })
+                  .catch(saveErrorHandler('Failed to save environment'));
+              }
+            }}
+          />
+        )}
+        {showConfirmGlobalEnvironmentClose && tab.type === 'global-environment-settings' && (
+          <ConfirmCloseEnvironment
+            isGlobal={true}
+            isDotEnv={globalEnvironmentDraft?.environmentUid?.startsWith('dotenv:')}
+            onCancel={() => setShowConfirmGlobalEnvironmentClose(false)}
+            onCloseWithoutSave={() => {
+              dispatch(clearGlobalEnvironmentDraft());
+              dispatch(closeTabs({ tabUids: [tab.uid] }));
+              setShowConfirmGlobalEnvironmentClose(false);
+            }}
+            onSaveAndClose={() => {
+              const draft = globalEnvironmentDraft;
+              if (draft?.environmentUid?.startsWith('dotenv:')) {
+                const onSuccess = () => {
+                  cleanup();
+                  dispatch(clearGlobalEnvironmentDraft());
+                  dispatch(closeTabs({ tabUids: [tab.uid] }));
+                  setShowConfirmGlobalEnvironmentClose(false);
+                };
+                const onFailed = () => {
+                  cleanup();
+                  setShowConfirmGlobalEnvironmentClose(false);
+                };
+                const cleanup = () => {
+                  window.removeEventListener('dotenv-save-complete', onSuccess);
+                  window.removeEventListener('dotenv-save-failed', onFailed);
+                };
+                window.addEventListener('dotenv-save-complete', onSuccess, { once: true });
+                window.addEventListener('dotenv-save-failed', onFailed, { once: true });
+                window.dispatchEvent(new Event('dotenv-save'));
+              } else if (draft?.environmentUid && draft?.variables) {
+                const invalidNames = getInvalidVariableNames(draft.variables);
+                if (invalidNames.length > 0) {
+                  toast.error(invalidVariableNamesError(invalidNames));
+                  return;
+                }
+                dispatch(saveGlobalEnvironment({ variables: draft.variables, environmentUid: draft.environmentUid }))
+                  .then(() => {
+                    dispatch(clearGlobalEnvironmentDraft());
+                    dispatch(closeTabs({ tabUids: [tab.uid] }));
+                    setShowConfirmGlobalEnvironmentClose(false);
+                    toast.success('Global environment saved');
+                  })
+                  .catch(saveErrorHandler('Failed to save global environment'));
+              }
+            }}
+          />
+        )}
+        {showConfirmApiSpecClose && tab.type === 'api-spec' && (
+          <ConfirmApiSpecClose
+            name={apiSpecTabName}
+            onCancel={() => setShowConfirmApiSpecClose(false)}
+            onCloseWithoutSave={() => {
+              dispatch(clearApiSpecDraft({ uid: apiSpec.uid }));
+              dispatch(closeTabs({ tabUids: [tab.uid] }));
+              setShowConfirmApiSpecClose(false);
+            }}
+            onSaveAndClose={() => {
+              dispatch(saveApiSpecTabDraft(tab.uid)).then(() => {
+                dispatch(closeTabs({ tabUids: [tab.uid] }));
+                setShowConfirmApiSpecClose(false);
+              }).catch(() => {});
+            }}
+          />
+        )}
+        {newRequestModal}
         {tab.type === 'folder-settings' && !folder ? (
-          <RequestTabNotFound handleCloseClick={handleCloseClick} />
+          tab.name && isItemsLoading
+            ? <RequestTabLoading handleCloseClick={handleCloseClick} name={tab.name} />
+            : <RequestTabNotFound handleCloseClick={handleCloseClick} />
         ) : tab.type === 'folder-settings' ? (
-          <SpecialTab handleCloseClick={handleCloseClick} handleDoubleClick={() => dispatch(makeTabPermanent({ uid: tab.uid }))} type={tab.type} tabName={folder?.name} />
+          <SpecialTab handleCloseClick={handleCloseFolderSettings} handleDoubleClick={() => dispatch(makeTabPermanent({ uid: tab.uid }))} type={tab.type} tabName={folder?.name} hasDraft={hasFolderDraft} />
+        ) : tab.type === 'collection-settings' ? (
+          <SpecialTab handleCloseClick={handleCloseCollectionSettings} handleDoubleClick={() => dispatch(makeTabPermanent({ uid: tab.uid }))} type={tab.type} tabName={collection?.name} hasDraft={hasDraft} />
+        ) : tab.type === 'environment-settings' ? (
+          <SpecialTab handleCloseClick={handleCloseEnvironmentSettings} handleDoubleClick={() => dispatch(makeTabPermanent({ uid: tab.uid }))} type={tab.type} hasDraft={hasEnvironmentDraft} />
+        ) : tab.type === 'global-environment-settings' ? (
+          <SpecialTab handleCloseClick={handleCloseGlobalEnvironmentSettings} handleDoubleClick={() => dispatch(makeTabPermanent({ uid: tab.uid }))} type={tab.type} hasDraft={hasGlobalEnvironmentDraft} />
+        ) : tab.type === 'workspaceOverview' ? (
+          <SpecialTab handleCloseClick={null} type={tab.type} />
+        ) : tab.type === 'workspaceEnvironments' ? (
+          <SpecialTab handleCloseClick={null} type={tab.type} hasDraft={hasGlobalEnvironmentDraft} />
+        ) : tab.type === 'mock-server' ? (
+          <SpecialTab handleCloseClick={handleCloseClick} handleDoubleClick={() => dispatch(makeTabPermanent({ uid: tab.uid }))} type={tab.type} tabName={tab.tabName} />
+        ) : tab.type === 'api-spec' ? (
+          <SpecialTab handleCloseClick={handleCloseApiSpec} handleDoubleClick={() => dispatch(makeTabPermanent({ uid: tab.uid }))} type={tab.type} tabName={apiSpecTabName} hasDraft={hasApiSpecDraft} />
         ) : (
           <SpecialTab handleCloseClick={handleCloseClick} handleDoubleClick={() => dispatch(makeTabPermanent({ uid: tab.uid }))} type={tab.type} />
         )}
@@ -108,28 +595,18 @@ const RequestTab = ({ tab, collection, tabIndex, collectionRequestTabs, folderUi
     );
   }
 
-
-  const getMethodText = useCallback((item) => {
-    if (!item) return;
-
-    switch (item.type) {
-      case 'grpc-request':
-        return 'gRPC';
-      case 'ws-request':
-        return 'WS';
-      case 'graphql-request':
-        return 'GQL';
-      default:
-        return item.draft ? get(item, 'draft.request.method') : get(item, 'request.method');
-    }
-  }, [item]);
-
-  const hasChanges = useMemo(() => hasRequestChanges(item), [item]);
+  if (tab.type === 'mock-response') {
+    return (
+      <MockResponseTab tab={tab} />
+    );
+  }
 
   if (!item) {
+    const showLoading = tab.name && isItemsLoading;
     return (
       <StyledWrapper
-        className="flex items-center justify-between tab-container px-1"
+        className="flex items-center justify-between tab-container px-2"
+        onMouseDown={handleMouseDown}
         onMouseUp={(e) => {
           if (e.button === 1) {
             e.preventDefault();
@@ -139,19 +616,21 @@ const RequestTab = ({ tab, collection, tabIndex, collectionRequestTabs, folderUi
           }
         }}
       >
-        <RequestTabNotFound handleCloseClick={handleCloseClick} />
+        {showLoading ? (
+          <RequestTabLoading handleCloseClick={handleCloseClick} name={tab.name} />
+        ) : (
+          <RequestTabNotFound handleCloseClick={handleCloseClick} />
+        )}
       </StyledWrapper>
     );
   }
 
-  const isWS = item.type === 'ws-request';
-  const method = getMethodText(item);
-
   return (
-    <StyledWrapper className="flex items-center justify-between tab-container px-1">
+    <StyledWrapper className="flex items-center justify-between tab-container px-2">
       {showConfirmClose && (
         <ConfirmRequestClose
-          item={item}
+          name={item.name}
+          type="request"
           onCancel={() => setShowConfirmClose(false)}
           onCloseWithoutSave={() => {
             isWS && closeWsConnection(item.uid);
@@ -169,13 +648,22 @@ const RequestTab = ({ tab, collection, tabIndex, collectionRequestTabs, folderUi
             setShowConfirmClose(false);
           }}
           onSaveAndClose={() => {
-            dispatch(saveRequest(item.uid, collection.uid))
+            if (isItemTransientRequest(item)) {
+              dispatch(addSaveTransientRequestModal({ item, collection, closeAfterSave: true }));
+              setShowConfirmClose(false);
+              return;
+            }
+
+            const useFileSave = collection.fileMode || item.type === 'js';
+            const savePromise = useFileSave
+              ? dispatch(saveFile(item?.draft?.raw ?? item?.raw, item.uid, collection.uid))
+              : dispatch(saveRequest(item.uid, collection.uid));
+
+            savePromise
               .then(() => {
-                dispatch(
-                  closeTabs({
-                    tabUids: [tab.uid]
-                  })
-                );
+                dispatch(closeTabs({
+                  tabUids: [tab.uid]
+                }));
                 setShowConfirmClose(false);
               })
               .catch((err) => {
@@ -184,10 +672,13 @@ const RequestTab = ({ tab, collection, tabIndex, collectionRequestTabs, folderUi
           }}
         />
       )}
+      {newRequestModal}
       <div
-        className={`flex items-baseline tab-label pl-2 ${tab.preview ? "italic" : ""}`}
+        ref={tabLabelRef}
+        className={`flex items-baseline tab-label ${tab.preview ? 'italic' : ''}`}
         onContextMenu={handleRightClick}
         onDoubleClick={() => dispatch(makeTabPermanent({ uid: tab.uid }))}
+        onMouseDown={handleMouseDown}
         onMouseUp={(e) => {
           if (!hasChanges) return handleMouseUp(e);
 
@@ -198,48 +689,60 @@ const RequestTab = ({ tab, collection, tabIndex, collectionRequestTabs, folderUi
           }
         }}
       >
-        <span className="tab-method uppercase" style={{ color: getMethodColor(method), fontSize: 12 }}>
-          {method}
-        </span>
-        <span className="ml-1 tab-name" title={item.name}>
+        {item.type === 'app' ? (
+          <span className="tab-method flex items-center" aria-label="App">
+            <IconAppWindow size={14} strokeWidth={1.5} />
+          </span>
+        ) : (
+          <span className="tab-method uppercase" style={{ color: getMethodColor(method) }}>
+            {method}
+          </span>
+        )}
+        <span ref={tabNameRef} className="ml-1 tab-name" title={item.name}>
           {item.name}
         </span>
         <RequestTabMenu
-          onDropdownCreate={onDropdownCreate}
+          menuDropdownRef={menuDropdownRef}
+          tabLabelRef={tabLabelRef}
           tabIndex={tabIndex}
+          isActive={isActive}
+          showNewRequestShortcut={isNewRequestShortcutEnabled}
+          onNewRequest={openNewRequest}
           collectionRequestTabs={collectionRequestTabs}
-          tabItem={item}
           collection={collection}
-          dropdownTippyRef={dropdownTippyRef}
           dispatch={dispatch}
+          dropdownContainerRef={dropdownContainerRef}
         />
       </div>
-      <div
-        className="flex px-2 close-icon-container"
+      <GradientCloseButton
+        hasChanges={hasChanges}
         onClick={(e) => {
           if (!hasChanges) {
             isWS && closeWsConnection(item.uid);
             return handleCloseClick(e);
-          };
+          }
 
           e.stopPropagation();
           e.preventDefault();
           setShowConfirmClose(true);
         }}
-      >
-        {!hasChanges ? (
-          <CloseTabIcon />
-        ) : (
-          <DraftTabIcon />
-        )}
-      </div>
+      />
     </StyledWrapper>
   );
 };
 
-function RequestTabMenu({ onDropdownCreate, collectionRequestTabs, tabIndex, collection, dropdownTippyRef, dispatch }) {
+function RequestTabMenu({ menuDropdownRef, tabLabelRef, collectionRequestTabs, tabIndex, isActive, showNewRequestShortcut, onNewRequest, collection, dispatch, dropdownContainerRef }) {
   const [showCloneRequestModal, setShowCloneRequestModal] = useState(false);
-  const [showAddNewRequestModal, setShowAddNewRequestModal] = useState(false);
+  const getKeybindingDisplayText = useKeybindingDisplayText();
+
+  // Returns the tab-label's position for dropdown positioning.
+  // Returns zero-sized rect if element isn't mounted yet (prevents Tippy errors).
+  const getTabLabelRect = () => {
+    if (!tabLabelRef.current) {
+      return { width: 0, height: 0, top: 0, bottom: 0, left: 0, right: 0 };
+    }
+    return tabLabelRef.current.getBoundingClientRect();
+  };
 
   const totalTabs = collectionRequestTabs.length || 0;
   const currentTabUid = collectionRequestTabs[tabIndex]?.uid;
@@ -250,10 +753,7 @@ function RequestTabMenu({ onDropdownCreate, collectionRequestTabs, tabIndex, col
   const hasRightTabs = totalTabs > tabIndex + 1;
   const hasOtherTabs = totalTabs > 1;
 
-  async function handleCloseTab(event, tabUid) {
-    event.stopPropagation();
-    dropdownTippyRef.current.hide();
-
+  async function handleCloseTab(tabUid) {
     if (!tabUid) {
       return;
     }
@@ -266,13 +766,10 @@ function RequestTabMenu({ onDropdownCreate, collectionRequestTabs, tabIndex, col
       }
 
       dispatch(closeTabs({ tabUids: [tabUid] }));
-    } catch (err) {}
+    } catch (err) { }
   }
 
-  function handleRevertChanges(event) {
-    event.stopPropagation();
-    dropdownTippyRef.current.hide();
-
+  function handleRevertChanges() {
     if (!currentTabUid) {
       return;
     }
@@ -285,49 +782,132 @@ function RequestTabMenu({ onDropdownCreate, collectionRequestTabs, tabIndex, col
           collectionUid: collection.uid
         }));
       }
-    } catch (err) {}
+    } catch (err) { }
   }
 
-  function handleCloseOtherTabs(event) {
-    dropdownTippyRef.current.hide();
+  async function handleCloseMultipleTabs(tabs) {
+    const tabUidsToClose = [];
 
+    for (const tab of tabs) {
+      const item = findItemInCollection(collection, tab.uid);
+
+      try {
+        if (tab.type === 'api-spec') {
+          await dispatch(saveApiSpecTabDraft(tab.uid));
+        } else if (item && hasRequestChanges(item)) {
+          await dispatch(saveRequest(item.uid, collection.uid, true));
+        }
+      } catch (err) {
+        continue;
+      }
+
+      if (tab?.uid) {
+        tabUidsToClose.push(tab.uid);
+      }
+    }
+
+    if (tabUidsToClose.length > 0) {
+      dispatch(closeTabs({ tabUids: tabUidsToClose }));
+    }
+  }
+
+  async function handleCloseOtherTabs() {
     const otherTabs = collectionRequestTabs.filter((_, index) => index !== tabIndex);
-    otherTabs.forEach((tab) => handleCloseTab(event, tab.uid));
+    await handleCloseMultipleTabs(otherTabs);
   }
 
-  function handleCloseTabsToTheLeft(event) {
-    dropdownTippyRef.current.hide();
-
+  async function handleCloseTabsToTheLeft() {
     const leftTabs = collectionRequestTabs.filter((_, index) => index < tabIndex);
-    leftTabs.forEach((tab) => handleCloseTab(event, tab.uid));
+    await handleCloseMultipleTabs(leftTabs);
   }
 
-  function handleCloseTabsToTheRight(event) {
-    dropdownTippyRef.current.hide();
-
+  async function handleCloseTabsToTheRight() {
     const rightTabs = collectionRequestTabs.filter((_, index) => index > tabIndex);
-    rightTabs.forEach((tab) => handleCloseTab(event, tab.uid));
+    await handleCloseMultipleTabs(rightTabs);
   }
 
-  function handleCloseSavedTabs(event) {
-    event.stopPropagation();
-
+  function handleCloseSavedTabs() {
     const items = flattenItems(collection?.items);
     const savedTabs = items?.filter?.((item) => !hasRequestChanges(item));
     const savedTabIds = savedTabs?.map((item) => item.uid) || [];
     dispatch(closeTabs({ tabUids: savedTabIds }));
   }
 
-  function handleCloseAllTabs(event) {
-    collectionRequestTabs.forEach((tab) => handleCloseTab(event, tab.uid));
+  async function handleCloseAllTabs() {
+    await handleCloseMultipleTabs(collectionRequestTabs);
   }
+
+  const menuItems = useMemo(() => [
+    {
+      id: 'new-request',
+      label: 'New Request',
+      // newRequest fires only for the active tab while no sidebar item is focused; otherwise it targets a different folder
+      shortcut: showNewRequestShortcut ? getKeybindingDisplayText('newRequest') : '',
+      onClick: onNewRequest
+    },
+    {
+      id: 'clone-request',
+      label: 'Clone Request',
+      onClick: () => setShowCloneRequestModal(true)
+    },
+    {
+      id: 'revert-changes',
+      label: 'Revert Changes',
+      onClick: handleRevertChanges,
+      disabled: !currentTabItem?.draft
+    },
+    {
+      id: 'close',
+      label: 'Close',
+      // closeTab only fires for the active tab, so a background tab's hint would close a different tab
+      shortcut: isActive ? getKeybindingDisplayText('closeTab') : '',
+      onClick: () => handleCloseTab(currentTabUid)
+    },
+    {
+      id: 'close-others',
+      label: 'Close Others',
+      onClick: handleCloseOtherTabs,
+      disabled: !hasOtherTabs
+    },
+    {
+      id: 'close-left',
+      label: 'Close to the Left',
+      onClick: handleCloseTabsToTheLeft,
+      disabled: !hasLeftTabs
+    },
+    {
+      id: 'close-right',
+      label: 'Close to the Right',
+      onClick: handleCloseTabsToTheRight,
+      disabled: !hasRightTabs
+    },
+    {
+      id: 'close-saved',
+      label: 'Close Saved',
+      onClick: handleCloseSavedTabs
+    },
+    {
+      id: 'close-all',
+      label: 'Close All',
+      shortcut: getKeybindingDisplayText('closeAllTabs'),
+      onClick: handleCloseAllTabs
+    }
+  ], [currentTabUid, currentTabItem, hasOtherTabs, hasLeftTabs, hasRightTabs, collection, collectionRequestTabs, tabIndex, isActive, showNewRequestShortcut, onNewRequest, dispatch, getKeybindingDisplayText]);
+
+  const menuDropdown = (
+    <MenuDropdown
+      ref={menuDropdownRef}
+      items={menuItems}
+      placement="bottom-start"
+      appendTo={dropdownContainerRef?.current || document.body}
+      getReferenceClientRect={getTabLabelRect}
+    >
+      <span></span>
+    </MenuDropdown>
+  );
 
   return (
     <Fragment>
-      {showAddNewRequestModal && (
-        <NewRequest collectionUid={collection.uid} onClose={() => setShowAddNewRequestModal(false)} />
-      )}
-
       {showCloneRequestModal && (
         <CloneCollectionItem
           item={currentTabItem}
@@ -336,51 +916,7 @@ function RequestTabMenu({ onDropdownCreate, collectionRequestTabs, tabIndex, col
         />
       )}
 
-      <Dropdown onCreate={onDropdownCreate} icon={<span></span>} placement="bottom-start">
-        <button
-          className="dropdown-item w-full"
-          onClick={() => {
-            dropdownTippyRef.current.hide();
-            setShowAddNewRequestModal(true);
-          }}
-        >
-          New Request
-        </button>
-        <button
-          className="dropdown-item w-full"
-          onClick={() => {
-            dropdownTippyRef.current.hide();
-            setShowCloneRequestModal(true);
-          }}
-        >
-          Clone Request
-        </button>
-        <button
-          className="dropdown-item w-full"
-          onClick={handleRevertChanges}
-          disabled={!currentTabItem?.draft}
-        >
-          Revert Changes
-        </button>
-        <button className="dropdown-item w-full" onClick={(e) => handleCloseTab(e, currentTabUid)}>
-          Close
-        </button>
-        <button disabled={!hasOtherTabs} className="dropdown-item w-full" onClick={handleCloseOtherTabs}>
-          Close Others
-        </button>
-        <button disabled={!hasLeftTabs} className="dropdown-item w-full" onClick={handleCloseTabsToTheLeft}>
-          Close to the Left
-        </button>
-        <button disabled={!hasRightTabs} className="dropdown-item w-full" onClick={handleCloseTabsToTheRight}>
-          Close to the Right
-        </button>
-        <button className="dropdown-item w-full" onClick={handleCloseSavedTabs}>
-          Close Saved
-        </button>
-        <button className="dropdown-item w-full" onClick={handleCloseAllTabs}>
-          Close All
-        </button>
-      </Dropdown>
+      {menuDropdown}
     </Fragment>
   );
 }

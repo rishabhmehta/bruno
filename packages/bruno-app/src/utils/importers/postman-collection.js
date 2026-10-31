@@ -11,11 +11,11 @@ const readFile = (files) => {
   });
 };
 
-const postmanToBruno = (collection) => {
+const postmanToBruno = (collection, options = {}) => {
   return new Promise((resolve, reject) => {
-    window.ipcRenderer.invoke('renderer:convert-postman-to-bruno', collection)
-      .then(result => resolve(result))
-      .catch(err => {
+    window.ipcRenderer.invoke('renderer:convert-postman-to-bruno', collection, options)
+      .then((result) => resolve(result))
+      .catch((err) => {
         console.error('Error converting Postman to Bruno via Electron:', err);
         reject(new BrunoError('Conversion failed'));
       });
@@ -23,19 +23,26 @@ const postmanToBruno = (collection) => {
 };
 
 const isPostmanCollection = (data) => {
-  const info = data.info;
+  // Newer Postman exports wrap the collection in a { collection: { ... } } envelope
+  const info = data.info || data?.collection?.info;
   if (!info || typeof info !== 'object') {
     return false;
   }
 
   const schema = info.schema;
-  // Accept schemas hosted at schema.getpostman.com or schema.postman.com
-  const schemaRegex = /^https:\/\/schema\.(?:getpostman|postman)\.com\//;
-  if (typeof schema === 'string' && schemaRegex.test(schema)) {
-    return true;
+  if (typeof schema !== 'string') {
+    return false;
   }
 
-  return false;
+  // Only accept supported Postman v2.0 and v2.1 schemas
+  const supportedSchemas = [
+    'https://schema.getpostman.com/json/collection/v2.0.0/collection.json',
+    'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
+    'https://schema.postman.com/json/collection/v2.0.0/collection.json',
+    'https://schema.postman.com/json/collection/v2.1.0/collection.json'
+  ];
+
+  return supportedSchemas.includes(schema);
 };
 
 export { postmanToBruno, readFile, isPostmanCollection };

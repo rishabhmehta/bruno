@@ -1,14 +1,34 @@
-const { get, each, find, compact, isString, filter } = require('lodash');
+const { get, each, find, isString, filter } = require('lodash');
 const fs = require('fs');
 const { getRequestUid, getExampleUid } = require('../cache/requestUids');
 const { uuid } = require('./common');
+const { posixifyPath } = require('./filesystem');
 const os = require('os');
 const { preferencesUtil } = require('../store/preferences');
+const path = require('path');
+const { DEFAULT_COLLECTION_FORMAT } = require('@usebruno/filestore');
+const { parseValueByDataType } = require('@usebruno/common/utils');
+const { GRPC_SCRIPT_KEYS, getEffectiveTags, getFolderTags, getOwnTags, normalizeLineEndings } = require('@usebruno/common');
 
-const mergeHeaders = (collection, request, requestTreePath) => {
+/**
+ * Returns the variable's runtime value with datatype-driven coercion applied.
+ * The shared `parseValueByDataType` from `@usebruno/common/utils` honors
+ * draft dataType changes — e.g. a user picking `@number` on a "42" string
+ * via the UI takes effect at request-execution time without requiring a save.
+ */
+const resolveTypedValue = (v) => parseValueByDataType(v.value, v.dataType);
+
+const FORMAT_CONFIG = {
+  yml: { ext: '.yml', collectionFile: 'opencollection.yml', folderFile: 'folder.yml' },
+  bru: { ext: '.bru', collectionFile: 'collection.bru', folderFile: 'folder.bru' }
+};
+
+const mergeHeaders = (collection, request, requestTreePath, options = {}) => {
+  const { includeDisabledHeaders = false } = options;
   let headers = new Map();
+  let disabledHeaders = new Map();
 
-  let collectionHeaders = get(collection, 'root.request.headers', []);
+  let collectionHeaders = collection?.draft?.root ? get(collection, 'draft.root.request.headers', []) : get(collection, 'root.request.headers', []);
   collectionHeaders.forEach((header) => {
     if (header.enabled) {
       if (header?.name?.toLowerCase?.() === 'content-type') {
@@ -16,12 +36,15 @@ const mergeHeaders = (collection, request, requestTreePath) => {
       } else {
         headers.set(header.name, header.value);
       }
+    } else if (header.name?.length > 0) {
+      disabledHeaders.set(header.name, header.value);
     }
   });
 
   for (let i of requestTreePath) {
     if (i.type === 'folder') {
-      let _headers = get(i, 'root.request.headers', []);
+      const folderRoot = i?.draft || i?.root;
+      let _headers = get(folderRoot, 'request.headers', []);
       _headers.forEach((header) => {
         if (header.enabled) {
           if (header.name.toLowerCase() === 'content-type') {
@@ -29,6 +52,8 @@ const mergeHeaders = (collection, request, requestTreePath) => {
           } else {
             headers.set(header.name, header.value);
           }
+        } else if (header.name?.length > 0) {
+          disabledHeaders.set(header.name, header.value);
         }
       });
     } else {
@@ -40,41 +65,51 @@ const mergeHeaders = (collection, request, requestTreePath) => {
           } else {
             headers.set(header.name, header.value);
           }
+        } else if (header.name?.length > 0) {
+          disabledHeaders.set(header.name, header.value);
         }
       });
     }
   }
 
-  request.headers = Array.from(headers, ([name, value]) => ({ name, value, enabled: true }));
+  request.headers = [
+    ...Array.from(headers, ([name, value]) => ({ name, value, enabled: true })),
+    ...(includeDisabledHeaders ? Array.from(disabledHeaders, ([name, value]) => ({ name, value, enabled: false })) : [])
+  ];
 };
 
 const mergeVars = (collection, request, requestTreePath = []) => {
   let reqVars = new Map();
-  let collectionRequestVars = get(collection, 'root.request.vars.req', []);
+  const collectionRoot = collection?.draft?.root || collection?.root || {};
+  let collectionRequestVars = get(collectionRoot, 'request.vars.req', []);
   let collectionVariables = {};
   collectionRequestVars.forEach((_var) => {
     if (_var.enabled) {
-      reqVars.set(_var.name, _var.value);
-      collectionVariables[_var.name] = _var.value;
+      const typed = resolveTypedValue(_var);
+      reqVars.set(_var.name, typed);
+      collectionVariables[_var.name] = typed;
     }
   });
   let folderVariables = {};
   let requestVariables = {};
   for (let i of requestTreePath) {
     if (i.type === 'folder') {
-      let vars = get(i, 'root.request.vars.req', []);
+      const folderRoot = i?.draft || i?.root;
+      let vars = get(folderRoot, 'request.vars.req', []);
       vars.forEach((_var) => {
         if (_var.enabled) {
-          reqVars.set(_var.name, _var.value);
-          folderVariables[_var.name] = _var.value;
+          const typed = resolveTypedValue(_var);
+          reqVars.set(_var.name, typed);
+          folderVariables[_var.name] = typed;
         }
       });
     } else {
       const vars = i?.draft ? get(i, 'draft.request.vars.req', []) : get(i, 'request.vars.req', []);
       vars.forEach((_var) => {
         if (_var.enabled) {
-          reqVars.set(_var.name, _var.value);
-          requestVariables[_var.name] = _var.value;
+          const typed = resolveTypedValue(_var);
+          reqVars.set(_var.name, typed);
+          requestVariables[_var.name] = typed;
         }
       });
     }
@@ -84,7 +119,7 @@ const mergeVars = (collection, request, requestTreePath = []) => {
   request.folderVariables = folderVariables;
   request.requestVariables = requestVariables;
 
-  if(request?.vars) {
+  if (request?.vars) {
     request.vars.req = Array.from(reqVars, ([name, value]) => ({
       name,
       value,
@@ -94,31 +129,32 @@ const mergeVars = (collection, request, requestTreePath = []) => {
   }
 
   let resVars = new Map();
-  let collectionResponseVars = get(collection, 'root.request.vars.res', []);
+  let collectionResponseVars = get(collectionRoot, 'request.vars.res', []);
   collectionResponseVars.forEach((_var) => {
     if (_var.enabled) {
-      resVars.set(_var.name, _var.value);
+      resVars.set(_var.name, resolveTypedValue(_var));
     }
   });
   for (let i of requestTreePath) {
     if (i.type === 'folder') {
-      let vars = get(i, 'root.request.vars.res', []);
+      const folderRoot = i?.draft || i?.root;
+      let vars = get(folderRoot, 'request.vars.res', []);
       vars.forEach((_var) => {
         if (_var.enabled) {
-          resVars.set(_var.name, _var.value);
+          resVars.set(_var.name, resolveTypedValue(_var));
         }
       });
     } else {
       const vars = i?.draft ? get(i, 'draft.request.vars.res', []) : get(i, 'request.vars.res', []);
       vars.forEach((_var) => {
         if (_var.enabled) {
-          resVars.set(_var.name, _var.value);
+          resVars.set(_var.name, resolveTypedValue(_var));
         }
       });
     }
   }
 
-  if(request?.vars) {
+  if (request?.vars) {
     request.vars.res = Array.from(resVars, ([name, value]) => ({
       name,
       value,
@@ -128,45 +164,295 @@ const mergeVars = (collection, request, requestTreePath = []) => {
   }
 };
 
+// __bruSetScope must stay on the IIFE opener line so wrapAndJoinScripts' line
+// counts (and stack-trace mapping) are unaffected.
+const wrapScriptInClosure = (script, scopeInfo = null, sourcePaths = null) => {
+  if (!script || script.trim() === '') {
+    return '';
+  }
+
+  const normalizedScript = normalizeLineEndings(script);
+
+  // Wrap script in async IIFE to create isolated scope
+  // This prevents variable re-declaration errors and allows early returns
+  // to only affect the current script segment
+  const scopeSetter = scopeInfo
+    ? ` __bruSetScope(${JSON.stringify(scopeInfo)});`
+    : '';
+  const dirnameParam = sourcePaths?.dirname != null ? JSON.stringify(sourcePaths.dirname) : 'undefined';
+  const filenameParam = sourcePaths?.filename != null ? JSON.stringify(sourcePaths.filename) : 'undefined';
+  return `await (async (__dirname, __filename) => {${scopeSetter}
+${normalizedScript}
+})(${dirnameParam}, ${filenameParam});`;
+};
+
+/**
+ * Wraps each script segment in an async IIFE, joins them with double newlines,
+ * and records the line range of the "request" segment for stack-trace mapping.
+ *
+ * @param {string[]} scripts - Script segments in order (e.g. collection, folders, request).
+ * @param {number} requestIndex - Index in scripts of the request-level segment.
+ * @param {object} [opts]
+ * @param {Array|null} [opts.segmentSources] - Source file info per non-request segment.
+ * @param {object|null} [opts.requestSegmentSource] - Source file info for the request segment.
+ * @param {string|null} [opts.collectionPath] - Collection dir; used as the __dirname fallback.
+ * @returns {{ code: string, metadata: { requestStartLine: number, requestEndLine: number, segments?: object[] } | null }}
+ *
+ * @example
+ * ** Input **
+ * const scripts = ['let col = 1;', 'let fold = 2;', 'let req = 3;'];
+ * const requestIndex = 2;
+ * const opts = {
+ *   segmentSources: [
+ *     { type: 'collection', displayPath: 'collection.bru', filePath: '/c/collection.bru' },
+ *     { type: 'folder',     displayPath: 'f/folder.bru',   filePath: '/c/f/folder.bru' },
+ *     null // request segment: sourced via requestSegmentSource
+ *   ],
+ *   requestSegmentSource: { type: 'request', displayPath: 'f/get.bru', filePath: '/c/f/get.bru' },
+ *   collectionPath: '/c'
+ * };
+ *
+ * ** Output **
+ * {
+ *   code:
+ *       'await (async (__dirname, __filename) => { __bruSetScope({...collection});\n' // line 1
+ *      + 'let col = 1;\n'                                                              // line 2
+ *      + '})("/c","/c/collection.bru");\n'                                             // line 3
+ *      + '\n'                                                                          // line 4 (blank separator)
+ *      + 'await (async (__dirname, __filename) => { __bruSetScope({...folder});\n'     // line 5
+ *      + 'let fold = 2;\n'                                                             // line 6
+ *      + '})("/c/f","/c/f/folder.bru");\n'                                             // line 7
+ *      + '\n'                                                                          // line 8 (blank separator)
+ *      + 'await (async (__dirname, __filename) => { __bruSetScope({...request});\n'    // line 9
+ *      + 'let req = 3;\n'                                                              // line 10
+ *      + '})("/c/f","/c/f/get.bru");',                                                 // line 11
+ *   metadata: {
+ *      requestStartLine: 9,
+ *      requestEndLine: 11,
+ *     segments: [
+ *       { startLine: 1, endLine: 3, type: 'collection', displayPath: 'collection.bru', filePath: '/c/collection.bru' },
+ *       { startLine: 5, endLine: 7, type: 'folder',     displayPath: 'f/folder.bru',   filePath: '/c/f/folder.bru' }
+ *     ]
+ *   }
+ * }
+ */
+const wrapAndJoinScripts = (scripts, requestIndex, { segmentSources = null, requestSegmentSource = null, collectionPath = null } = {}) => {
+  const buildScopeInfo = (i) => {
+    if (i === requestIndex && requestSegmentSource?.displayPath) {
+      return { type: 'request', sourceFile: requestSegmentSource.displayPath };
+    }
+    const seg = segmentSources?.[i];
+    if (!seg?.type || !seg?.displayPath) return null;
+    return { type: seg.type, sourceFile: seg.displayPath };
+  };
+
+  const buildSourcePaths = (i) => {
+    const filePath = i === requestIndex
+      ? requestSegmentSource?.filePath
+      : segmentSources?.[i]?.filePath;
+    if (filePath) return { dirname: path.dirname(filePath), filename: filePath };
+    // No source file, anchor __dirname to the collection dir; no honest __filename to name.
+    if (collectionPath) return { dirname: collectionPath, filename: null };
+    return null;
+  };
+
+  const wrapped = scripts.map((s, i) => wrapScriptInClosure(s, buildScopeInfo(i), buildSourcePaths(i)));
+  const code = wrapped.filter(Boolean).join('\n\n');
+
+  let offset = 0;
+  let metadata = null;
+  const segments = [];
+
+  for (let i = 0; i < scripts.length; i++) {
+    if (!wrapped[i]) continue;
+    const lineCount = wrapped[i].split('\n').length;
+    const startLine = offset + 1;
+    const endLine = offset + lineCount;
+
+    if (i === requestIndex) {
+      metadata = { requestStartLine: startLine, requestEndLine: endLine };
+    }
+
+    if (segmentSources?.[i]) {
+      segments.push({ startLine, endLine, ...segmentSources[i] });
+    }
+
+    offset += lineCount + 1;
+  }
+
+  // Request-level script was empty, but collection/folder scripts produced code.
+  // Use a zero line range to prevent stack traces from mapping to the request file.
+  if (!metadata && code) {
+    metadata = { requestStartLine: 0, requestEndLine: 0 };
+  }
+
+  if (metadata && segments.length > 0) {
+    metadata.segments = segments;
+  }
+
+  return { code, metadata };
+};
+
 const mergeScripts = (collection, request, requestTreePath, scriptFlow) => {
-  let collectionPreReqScript = get(collection, 'root.request.script.req', '');
-  let collectionPostResScript = get(collection, 'root.request.script.res', '');
-  let collectionTests = get(collection, 'root.request.tests', '');
+  const collectionRoot = collection?.draft?.root || collection?.root || {};
+  let collectionPreReqScript = get(collectionRoot, 'request.script.req', '');
+  let collectionPostResScript = get(collectionRoot, 'request.script.res', '');
+  let collectionTests = get(collectionRoot, 'request.tests', '');
+
+  // Build source file info for error trace mapping
+  const format = collection.format || 'bru';
+  const config = FORMAT_CONFIG[format];
+  const collectionSource = {
+    type: 'collection',
+    filePath: path.join(collection.pathname, config.collectionFile),
+    displayPath: config.collectionFile
+  };
+
+  const requestItem = requestTreePath?.[requestTreePath.length - 1];
+  const requestPathname = request?.pathname || requestItem?.pathname;
+  const requestSegmentSource = requestPathname
+    ? {
+        filePath: requestPathname,
+        ...(collection?.pathname
+          ? { displayPath: posixifyPath(path.relative(collection.pathname, requestPathname)) }
+          : {})
+      }
+    : null;
+
+  const withContent = (source, script) =>
+    script?.trim() ? { ...source, scriptContent: script } : source;
 
   let combinedPreReqScript = [];
+  let combinedPreReqSources = [];
   let combinedPostResScript = [];
+  let combinedPostResSources = [];
   let combinedTests = [];
+  let combinedTestsSources = [];
+
   for (let i of requestTreePath) {
     if (i.type === 'folder') {
-      let preReqScript = get(i, 'root.request.script.req', '');
+      const folderRoot = i?.draft || i?.root;
+      const folderSource = {
+        type: 'folder',
+        filePath: path.join(i.pathname, config.folderFile),
+        displayPath: posixifyPath(path.relative(collection.pathname, path.join(i.pathname, config.folderFile)))
+      };
+
+      let preReqScript = get(folderRoot, 'request.script.req', '');
       if (preReqScript && preReqScript.trim() !== '') {
         combinedPreReqScript.push(preReqScript);
+        combinedPreReqSources.push(withContent(folderSource, preReqScript));
       }
 
-      let postResScript = get(i, 'root.request.script.res', '');
+      let postResScript = get(folderRoot, 'request.script.res', '');
       if (postResScript && postResScript.trim() !== '') {
         combinedPostResScript.push(postResScript);
+        combinedPostResSources.push(withContent(folderSource, postResScript));
       }
 
-      let tests = get(i, 'root.request.tests', '');
+      let tests = get(folderRoot, 'request.tests', '');
       if (tests && tests?.trim?.() !== '') {
         combinedTests.push(tests);
+        combinedTestsSources.push(withContent(folderSource, tests));
       }
     }
   }
 
-  request.script.req = compact([collectionPreReqScript, ...combinedPreReqScript, request?.script?.req || '']).join(os.EOL);
+  // Capture original request script content before overwriting with combined code
+  const originalPreReqScript = request?.script?.req || '';
+  const originalPostResScript = request?.script?.res || '';
+  const originalTests = request?.tests || '';
 
+  // Wrap scripts, join them, and annotate metadata with the original request script content.
+  // Returns { code, metadata } where metadata.requestScriptContent is set.
+  const buildCombinedScript = (scripts, requestIndex, sources, originalScript) => {
+    const result = wrapAndJoinScripts(scripts, requestIndex, {
+      segmentSources: sources,
+      requestSegmentSource,
+      collectionPath: collection?.pathname ?? null
+    });
+    if (result.metadata) {
+      result.metadata.requestScriptContent = originalScript;
+    }
+    return result;
+  };
+
+  // Wrap each script segment in its own closure and join them
+  // This allows each script to run separately with its own scope,
+  // preventing variable re-declaration errors and allowing early returns
+  // to only affect that specific script segment
+  const collectionPreReqSource = withContent(collectionSource, collectionPreReqScript);
+  const preReqScripts = [
+    collectionPreReqScript,
+    ...combinedPreReqScript,
+    originalPreReqScript
+  ];
+  const preReqSources = [collectionPreReqSource, ...combinedPreReqSources, null];
+  const preReq = buildCombinedScript(preReqScripts, preReqScripts.length - 1, preReqSources, originalPreReqScript);
+  request.script.req = preReq.code;
+  request.script.reqMetadata = preReq.metadata;
+
+  // Handle post-response scripts based on scriptFlow
+  const collectionPostResSource = withContent(collectionSource, collectionPostResScript);
   if (scriptFlow === 'sequential') {
-    request.script.res = compact([collectionPostResScript, ...combinedPostResScript, request?.script?.res || '']).join(os.EOL);
+    const postResScripts = [
+      collectionPostResScript,
+      ...combinedPostResScript,
+      originalPostResScript
+    ];
+    const postResSources = [collectionPostResSource, ...combinedPostResSources, null];
+    const postRes = buildCombinedScript(postResScripts, postResScripts.length - 1, postResSources, originalPostResScript);
+    request.script.res = postRes.code;
+    request.script.resMetadata = postRes.metadata;
   } else {
-    request.script.res = compact([request?.script?.res || '', ...combinedPostResScript.reverse(), collectionPostResScript]).join(os.EOL);
+    // Reverse order for non-sequential flow
+    const postResScripts = [
+      originalPostResScript,
+      ...[...combinedPostResScript].reverse(),
+      collectionPostResScript
+    ];
+    const postResSources = [null, ...[...combinedPostResSources].reverse(), collectionPostResSource];
+    const postRes = buildCombinedScript(postResScripts, 0, postResSources, originalPostResScript);
+    request.script.res = postRes.code;
+    request.script.resMetadata = postRes.metadata;
   }
 
+  // TODO: Provide Collection/Folder scripts to 'buildCombinedScript' once available
+  // Including now to provide stack trace on error
+  for (const hook of GRPC_SCRIPT_KEYS) {
+    const hookScript = get(request, `script.${hook}`, '');
+    if (!hookScript || hookScript.trim() === '') {
+      continue;
+    }
+
+    const combined = buildCombinedScript([hookScript], 0, [null], hookScript);
+    request.script[hook] = combined.code;
+    request.script[`${hook}Metadata`] = combined.metadata;
+  }
+
+  // Handle tests based on scriptFlow
+  const collectionTestsSource = withContent(collectionSource, collectionTests);
   if (scriptFlow === 'sequential') {
-    request.tests = compact([collectionTests, ...combinedTests, request?.tests || '']).join(os.EOL);
+    const testScripts = [
+      collectionTests,
+      ...combinedTests,
+      originalTests
+    ];
+    const testSources = [collectionTestsSource, ...combinedTestsSources, null];
+    const tests = buildCombinedScript(testScripts, testScripts.length - 1, testSources, originalTests);
+    request.tests = tests.code;
+    request.testsMetadata = tests.metadata;
   } else {
-    request.tests = compact([request?.tests || '', ...combinedTests.reverse(), collectionTests]).join(os.EOL);
+    // Reverse order for non-sequential flow
+    const testScripts = [
+      originalTests,
+      ...[...combinedTests].reverse(),
+      collectionTests
+    ];
+    const testSources = [null, ...[...combinedTestsSources].reverse(), collectionTestsSource];
+    const tests = buildCombinedScript(testScripts, 0, testSources, originalTests);
+    request.tests = tests.code;
+    request.testsMetadata = tests.metadata;
   }
 };
 
@@ -232,8 +518,8 @@ const parseBruFileMeta = (data) => {
       const metaContent = match[1].trim();
       const lines = metaContent.replace(/\r\n/g, '\n').split('\n');
       const metaJson = {};
-      lines.forEach(line => {
-        const [key, value] = line.split(':').map(str => str.trim());
+      lines.forEach((line) => {
+        const [key, value] = line.split(':').map((str) => str.trim());
         if (key && value) {
           metaJson[key] = isNaN(value) ? value : Number(value);
         }
@@ -280,10 +566,73 @@ const parseBruFileMeta = (data) => {
     console.error('Error reading file:', err);
     return null;
   }
-}
+};
+
+// Parse YML file meta information
+const parseYmlFileMeta = (data) => {
+  try {
+    const yaml = require('js-yaml');
+    const parsed = yaml.load(data);
+
+    if (!parsed || !parsed.meta) {
+      console.log('No "meta" section found in YAML file.');
+      return null;
+    }
+
+    const metaJson = parsed.meta;
+
+    // Transform to the format expected by bruno-app
+    let requestType = metaJson.type;
+    const typeMap = {
+      http: 'http-request',
+      graphql: 'graphql-request',
+      grpc: 'grpc-request',
+      ws: 'ws-request'
+    };
+    requestType = typeMap[requestType] || 'http-request';
+
+    const sequence = metaJson.seq;
+    const transformedJson = {
+      type: requestType,
+      name: metaJson.name,
+      seq: !isNaN(sequence) ? Number(sequence) : 1,
+      settings: {},
+      tags: metaJson.tags || [],
+      request: {
+        method: '',
+        url: '',
+        params: [],
+        headers: [],
+        auth: { mode: 'none' },
+        body: { mode: 'none' },
+        script: {},
+        vars: {},
+        assertions: [],
+        tests: '',
+        docs: ''
+      }
+    };
+
+    return transformedJson;
+  } catch (err) {
+    console.error('Error parsing YAML file meta:', err);
+    return null;
+  }
+};
+
+// Format-aware meta parsing function
+const parseFileMeta = (data, format = DEFAULT_COLLECTION_FORMAT) => {
+  if (format === 'yml') {
+    return parseYmlFileMeta(data);
+  } else {
+    return parseBruFileMeta(data);
+  }
+};
 
 const hydrateRequestWithUuid = (request, pathname) => {
   request.uid = getRequestUid(pathname);
+  const prefix = path.join(os.tmpdir(), 'bruno-');
+  request.isTransient = pathname.startsWith(prefix);
 
   const params = get(request, 'request.params', []);
   const headers = get(request, 'request.headers', []);
@@ -303,6 +652,8 @@ const hydrateRequestWithUuid = (request, pathname) => {
   bodyFormUrlEncoded.forEach((param) => (param.uid = uuid()));
   bodyMultipartForm.forEach((param) => (param.uid = uuid()));
   file.forEach((param) => (param.uid = uuid()));
+  const wsMessages = get(request, 'request.body.ws', []);
+  wsMessages.forEach((msg) => (msg.uid = uuid()));
   examples.forEach((example, eIndex) => {
     example.uid = getExampleUid(pathname, eIndex);
     example.itemUid = request.uid;
@@ -369,7 +720,7 @@ const transformRequestToSaveToFilesystem = (item) => {
   if (_item.type === 'grpc-request') {
     itemToSave.request.methodType = _item.request.methodType;
     itemToSave.request.protoPath = _item.request.protoPath;
-    delete itemToSave.request.params
+    delete itemToSave.request.params;
   }
 
   // Only process params for non-gRPC requests
@@ -380,6 +731,7 @@ const transformRequestToSaveToFilesystem = (item) => {
         name: param.name,
         value: param.value,
         description: param.description,
+        annotations: param.annotations,
         type: param.type,
         enabled: param.enabled
       });
@@ -392,6 +744,7 @@ const transformRequestToSaveToFilesystem = (item) => {
       name: header.name,
       value: header.value,
       description: header.description,
+      annotations: header.annotations,
       enabled: header.enabled
     });
   });
@@ -406,7 +759,7 @@ const transformRequestToSaveToFilesystem = (item) => {
   if (itemToSave.request.body.mode === 'grpc') {
     itemToSave.request.body = {
       ...itemToSave.request.body,
-      grpc: itemToSave.request.body.grpc.map(({name, content}, index) => ({
+      grpc: itemToSave.request.body.grpc.map(({ name, content }, index) => ({
         name: name ? name : `message ${index + 1}`,
         content: replaceTabsWithSpaces(content)
       }))
@@ -414,7 +767,7 @@ const transformRequestToSaveToFilesystem = (item) => {
   }
 
   return itemToSave;
-}
+};
 
 const sortCollection = (collection) => {
   const items = collection.items || [];
@@ -453,6 +806,10 @@ const getAllRequestsInFolderRecursively = (folder = {}) => {
 
   if (folder.items && folder.items.length) {
     folder.items.forEach((item) => {
+      // Skip transient requests
+      if (item.isTransient) {
+        return;
+      }
       if (item.type !== 'folder') {
         requests.push(item);
       } else {
@@ -465,18 +822,18 @@ const getAllRequestsInFolderRecursively = (folder = {}) => {
 };
 
 const getEnvVars = (environment = {}) => {
-  const variables = environment.variables;
-  if (!variables || !variables.length) {
+  const variables = [...(environment?.inheritedVariables || []), ...(environment?.variables || [])];
+  if (!variables.length) {
     return {
       __name__: environment.name
     };
   }
 
   const envVars = {};
-  each(variables, (variable) => {
-    if (variable.enabled) {
-      envVars[variable.name] = variable.value;
-    }
+  // Apply secrets last so a secret wins over a plain variable of the same name.
+  const enabledVars = variables.filter((variable) => variable.enabled);
+  [...enabledVars.filter((v) => !v.secret), ...enabledVars.filter((v) => v.secret)].forEach((variable) => {
+    envVars[variable.name] = resolveTypedValue(variable);
   });
 
   return {
@@ -497,18 +854,45 @@ const getFormattedCollectionOauth2Credentials = ({ oauth2Credentials = [] }) => 
   return credentialsVariables;
 };
 
+/**
+ * Effective tags (own + inherited) for every item in the collection, keyed by uid.
+ * Resolves the whole tree in a single walk - resolving each item on its own instead would
+ * re-flatten the collection once per ancestor level.
+ */
+const getEffectiveTagsByUid = (collection) => {
+  const tagsByUid = new Map();
+
+  const walk = (items, inheritedTags) => {
+    each(items, (item) => {
+      if (item.type === 'folder') {
+        const folderTags = getEffectiveTags(getFolderTags(item), inheritedTags);
+        tagsByUid.set(item.uid, folderTags);
+        walk(item.items, folderTags);
+        return;
+      }
+      tagsByUid.set(item.uid, getEffectiveTags(getOwnTags(item), inheritedTags));
+    });
+  };
+
+  walk(collection.items, []);
+
+  return tagsByUid;
+};
+
 const mergeAuth = (collection, request, requestTreePath) => {
   // Start with collection level auth (always consider collection auth as base)
-  let collectionAuth = get(collection, 'root.request.auth', { mode: 'none' });
+  const collectionRoot = collection?.draft?.root || collection?.root || {};
+  let collectionAuth = get(collectionRoot, 'request.auth', { mode: 'none' });
   let effectiveAuth = collectionAuth;
   let lastFolderWithAuth = null;
 
   // Traverse through the path to find the closest auth configuration
   for (let i of requestTreePath) {
     if (i.type === 'folder') {
-      const folderAuth = get(i, 'root.request.auth');
+      const folderRoot = i?.draft || i?.root;
+      const folderAuth = get(folderRoot, 'request.auth');
       // Only consider folders that have a valid auth mode
-      if (folderAuth && folderAuth.mode && folderAuth.mode !== 'none' && folderAuth.mode !== 'inherit') {
+      if (folderAuth && folderAuth.mode && folderAuth.mode !== 'inherit') {
         effectiveAuth = folderAuth;
         lastFolderWithAuth = i;
       }
@@ -518,7 +902,7 @@ const mergeAuth = (collection, request, requestTreePath) => {
   // If request is set to inherit, use the effective auth from collection/folders
   if (request.auth.mode === 'inherit') {
     request.auth = effectiveAuth;
-    
+
     // For OAuth2, we need to handle credentials properly
     if (effectiveAuth.mode === 'oauth2') {
       if (lastFolderWithAuth) {
@@ -568,17 +952,17 @@ const resolveInheritedSettings = (settings) => {
   return resolvedSettings;
 };
 
-const sortByNameThenSequence = items => {
-  const isSeqValid = seq => Number.isFinite(seq) && Number.isInteger(seq) && seq > 0;
+const sortByNameThenSequence = (items) => {
+  const isSeqValid = (seq) => Number.isFinite(seq) && Number.isInteger(seq) && seq > 0;
 
   // Sort folders alphabetically by name
   const alphabeticallySorted = [...items].sort((a, b) => a.name && b.name && a.name.localeCompare(b.name));
 
   // Extract folders without 'seq'
-  const withoutSeq = alphabeticallySorted.filter(f => !isSeqValid(f['seq']));
+  const withoutSeq = alphabeticallySorted.filter((f) => !isSeqValid(f['seq']));
 
   // Extract folders with 'seq' and sort them by 'seq'
-  const withSeq = alphabeticallySorted.filter(f => isSeqValid(f['seq'])).sort((a, b) => a.seq - b.seq);
+  const withSeq = alphabeticallySorted.filter((f) => isSeqValid(f['seq'])).sort((a, b) => a.seq - b.seq);
 
   const sortedItems = withoutSeq;
 
@@ -597,7 +981,7 @@ const sortByNameThenSequence = items => {
       const newGroup = Array.isArray(existingItem)
         ? [...existingItem, item]
         : [existingItem, item];
-      
+
       withoutSeq.splice(position, 1, newGroup);
     } else {
       // Insert item at the specified position
@@ -609,12 +993,27 @@ const sortByNameThenSequence = items => {
   return sortedItems.flat();
 };
 
+// Resolves the JS sandbox a collection's scripts run in.
+// Duplicated as getJsSandboxRuntime in ipc/network/index.js; keep the two in sync.
+const getJsSandboxRuntime = (collection) => {
+  const securityConfig = get(collection, 'securityConfig', {});
+
+  if (securityConfig.jsSandboxMode === 'developer') {
+    return 'nodevm';
+  }
+
+  return 'quickjs';
+};
+
 module.exports = {
+  getJsSandboxRuntime,
   mergeHeaders,
   mergeVars,
   mergeScripts,
   mergeAuth,
+  wrapAndJoinScripts,
   getTreePathFromCollectionToItem,
+  getEffectiveTagsByUid,
   flattenItems,
   findItem,
   findItemInCollection,
@@ -623,6 +1022,7 @@ module.exports = {
   findParentItemInCollection,
   findParentItemInCollectionByPathname,
   parseBruFileMeta,
+  parseFileMeta,
   hydrateRequestWithUuid,
   transformRequestToSaveToFilesystem,
   sortCollection,

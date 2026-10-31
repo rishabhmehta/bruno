@@ -27,11 +27,13 @@ const mapPairListToKeyValPairs = (pairList = [], parseEnabled = true) => {
       enabled = false;
     }
 
-    return {
+    const result = {
       name,
       value,
       enabled
     };
+
+    return result;
   });
 };
 
@@ -54,12 +56,14 @@ const mapRequestParams = (pairList = [], type) => {
       enabled = false;
     }
 
-    return {
+    const result = {
       name,
       value,
       enabled,
       type
     };
+
+    return result;
   });
 };
 
@@ -69,7 +73,7 @@ const mapRequestParams = (pairList = [], type) => {
  */
 const multipartExtractContentType = (pair) => {
   if (_.isString(pair.value)) {
-    const match = pair.value.match(/^(.*?)\s*@contentType\((.*?)\)\s*$/);
+    const match = pair.value.match(/^(.*?)\s*@contentType\((.*?)\)\s*$/s);
     if (match != null && match.length > 2) {
       pair.value = match[1];
       pair.contentType = match[2];
@@ -85,7 +89,7 @@ const multipartExtractContentType = (pair) => {
  */
 const fileExtractContentType = (pair) => {
   if (_.isString(pair.value)) {
-    const match = pair.value.match(/^(.*?)\s*@contentType\((.*?)\)\s*$/);
+    const match = pair.value.match(/^(.*?)\s*@contentType\((.*?)\)\s*$/s);
     if (match && match.length > 2) {
       pair.value = match[1].trim();
       pair.contentType = match[2].trim();
@@ -108,7 +112,7 @@ const mapPairListToKeyValPairsMultipart = (pairList = [], parseEnabled = true) =
     pair.type = 'text';
     multipartExtractContentType(pair);
 
-    if (pair.value.startsWith('@file(') && pair.value.endsWith(')')) {
+    if (_.isString(pair.value) && pair.value.startsWith('@file(') && pair.value.endsWith(')')) {
       let filestr = pair.value.replace(/^@file\(/, '').replace(/\)$/, '');
       pair.type = 'file';
       pair.value = filestr.split('|');

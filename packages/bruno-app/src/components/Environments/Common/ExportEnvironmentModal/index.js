@@ -5,10 +5,37 @@ import { exportBrunoEnvironment } from 'utils/exporters/bruno-environment';
 import { browseDirectory } from 'providers/ReduxStore/slices/collections/actions';
 import { useDispatch } from 'react-redux';
 import toast from 'react-hot-toast';
+import { IconAlertTriangle } from '@tabler/icons';
+import { getInheritedEnvironments } from '@usebruno/common/utils';
 import StyledWrapper from './StyledWrapper';
+import Button from 'ui/Button';
 
-const ExportEnvironmentModal = ({ onClose, environments = [], environmentType }) => {
+const ExportEnvironmentModal = ({ onClose, environments = [], environmentType, preselectedEnvironmentUids }) => {
   const dispatch = useDispatch();
+
+  // empty or missing list means no preselection, so everything starts selected.
+  const preselectedKey = preselectedEnvironmentUids?.length ? preselectedEnvironmentUids.join(',') : '';
+  const preselectedUids = useMemo(
+    () => (preselectedKey ? new Set(preselectedKey.split(',')) : null),
+    [preselectedKey]
+  );
+
+  // With a preselection, list only those environments and the ones they inherit from.
+  const visibleEnvironments = useMemo(() => {
+    if (!preselectedUids) return environments;
+
+    const visibleUids = new Set();
+    environments.forEach((environment) => {
+      if (!preselectedUids.has(environment.uid)) return;
+
+      visibleUids.add(environment.uid);
+      getInheritedEnvironments({ environments, environment }).inheritedEnvironments.forEach((inherited) => {
+        visibleUids.add(inherited.uid);
+      });
+    });
+
+    return environments.filter((environment) => visibleUids.has(environment.uid));
+  }, [environments, preselectedUids]);
 
   // Helper function to truncate environment names
   const truncateEnvName = (name) => {
@@ -27,13 +54,13 @@ const ExportEnvironmentModal = ({ onClose, environments = [], environmentType })
   useEffect(() => {
     const initialSelection = {};
 
-    // Add all environments and select them by default
-    environments.forEach((env) => {
-      initialSelection[env.uid] = true;
+    // Select all by default, or only the preselected ones when given
+    visibleEnvironments.forEach((env) => {
+      initialSelection[env.uid] = preselectedUids ? preselectedUids.has(env.uid) : true;
     });
 
     setSelectedEnvironments(initialSelection);
-  }, [environments]);
+  }, [visibleEnvironments, preselectedUids]);
 
   useEffect(() => {
     const selectedCount = Object.values(selectedEnvironments).filter(Boolean).length;
@@ -69,9 +96,9 @@ const ExportEnvironmentModal = ({ onClose, environments = [], environmentType })
   };
 
   const handleSelectAll = () => {
-    const allSelected = environments.every((env) => selectedEnvironments[env.uid]) || false;
+    const allSelected = visibleEnvironments.every((env) => selectedEnvironments[env.uid]) || false;
 
-    const newSelection = environments.reduce((acc, env) => ({
+    const newSelection = visibleEnvironments.reduce((acc, env) => ({
       ...acc,
       [env.uid]: !allSelected
     }), {}) || {};
@@ -85,6 +112,32 @@ const ExportEnvironmentModal = ({ onClose, environments = [], environmentType })
   }, [environments, selectedEnvironments]);
 
   const selectedCount = selectedEnvs.length;
+
+  const unselectedInheritedEnvironmentNamesByUid = useMemo(() => {
+    const namesByUid = {};
+
+    environments.forEach((environment) => {
+      if (!selectedEnvironments[environment.uid]) {
+        namesByUid[environment.uid] = [];
+        return;
+      }
+
+      const { inheritedEnvironments, missingInheritedEnvironmentName } = getInheritedEnvironments({
+        environments,
+        environment
+      });
+
+      const unselectedNames = inheritedEnvironments
+        .filter((inheritedEnvironment) => !selectedEnvironments[inheritedEnvironment.uid])
+        .map((inheritedEnvironment) => inheritedEnvironment.name);
+
+      namesByUid[environment.uid] = missingInheritedEnvironmentName
+        ? [missingInheritedEnvironmentName, ...unselectedNames]
+        : unselectedNames;
+    });
+
+    return namesByUid;
+  }, [environments, selectedEnvironments]);
 
   const exportFormatOptions = useMemo(() => {
     const isMultiple = selectedCount > 1;
@@ -146,7 +199,7 @@ const ExportEnvironmentModal = ({ onClose, environments = [], environmentType })
               {environments && environments.length > 0 ? (
                 <div className="flex flex-col h-full">
                   <div className="flex justify-between items-center mb-2 pb-1">
-                    <h3 className="font-semibold text-sm text-theme">
+                    <h3 className="font-medium text-theme">
                       {environmentType === 'global' ? 'Global Environments' : 'Collection Environments'}
                     </h3>
                     <button
@@ -154,28 +207,43 @@ const ExportEnvironmentModal = ({ onClose, environments = [], environmentType })
                       onClick={handleSelectAll}
                       className="text-xs text-link px-1 py-0.5 rounded transition-colors"
                     >
-                      {environments.every((env) => selectedEnvironments[env.uid]) ? 'Deselect All' : 'Select All'}
+                      {visibleEnvironments.every((env) => selectedEnvironments[env.uid]) ? 'Deselect All' : 'Select All'}
                     </button>
                   </div>
-                  <div className="flex flex-col gap-1 flex-1 overflow-y-auto">
-                    {environments.map((env) => (
-                      <label key={env.uid} className="environment-item">
-                        <input
-                          type="checkbox"
-                          checked={selectedEnvironments[env.uid] || false}
-                          onChange={() => handleEnvironmentToggle(env.uid)}
-                          disabled={isExporting}
-                          className="w-3.5 h-3.5 flex-shrink-0"
-                        />
-                        <span className="environment-name">{truncateEnvName(env.name)}</span>
-                      </label>
-                    ))}
+                  <div className="environment-list flex flex-col gap-1 flex-1 overflow-y-auto">
+                    {visibleEnvironments.map((env) => {
+                      const unselectedInheritedEnvironmentNames = unselectedInheritedEnvironmentNamesByUid[env.uid];
+
+                      return (
+                        <div key={env.uid}>
+                          <label className="environment-item">
+                            <input
+                              type="checkbox"
+                              checked={selectedEnvironments[env.uid] || false}
+                              onChange={() => handleEnvironmentToggle(env.uid)}
+                              disabled={isExporting}
+                              className="w-3.5 h-3.5 flex-shrink-0"
+                            />
+                            <span className="environment-name">{truncateEnvName(env.name)}</span>
+                          </label>
+                          {unselectedInheritedEnvironmentNames.length > 0 && (
+                            <div className="inheritance-warning" data-testid="env-export-inheritance-warning">
+                              <IconAlertTriangle size={14} strokeWidth={1.5} className="warning-icon" />
+                              <span>
+                                inherits{' '}
+                                <span className="inherited-name">{unselectedInheritedEnvironmentNames.join(', ')}</span>
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               ) : (
                 <div className="flex flex-col h-full">
                   <div className="flex justify-between items-center mb-2 pb-1">
-                    <h3 className="font-semibold text-sm text-theme">
+                    <h3 className="font-medium text-theme">
                       {environmentType === 'global' ? 'Global Environments' : 'Collection Environments'}
                     </h3>
                   </div>
@@ -191,7 +259,7 @@ const ExportEnvironmentModal = ({ onClose, environments = [], environmentType })
             {/* Export Format Section */}
             {selectedCount > 0 && (
               <div className="mb-4">
-                <label className="block text-sm font-medium mb-2 text-theme">
+                <label className="block font-medium mb-2 text-theme">
                   Export Format
                 </label>
                 <div className="space-y-2">
@@ -207,7 +275,7 @@ const ExportEnvironmentModal = ({ onClose, environments = [], environmentType })
                         className={`mt-0.5 mr-3 w-4 h-4 ${option.disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                       />
                       <div>
-                        <div className={`text-sm font-medium ${option.disabled ? 'text-muted' : 'text-theme'}`}>{option.label}</div>
+                        <div className={`font-medium ${option.disabled ? 'text-muted' : 'text-theme'}`}>{option.label}</div>
                         <div className="text-xs text-muted">{option.description}</div>
                       </div>
                     </label>
@@ -218,7 +286,7 @@ const ExportEnvironmentModal = ({ onClose, environments = [], environmentType })
 
             {/* Location Input Section */}
             <div className="mb-4">
-              <label htmlFor="export-location" className="block text-sm font-medium mb-2 text-theme">
+              <label htmlFor="export-location" className="block font-medium mb-2 text-theme">
                 Location
               </label>
               <div className="flex flex-col relative items-center">
@@ -242,22 +310,26 @@ const ExportEnvironmentModal = ({ onClose, environments = [], environmentType })
 
             {/* Export Actions */}
             <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-200 dark:border-gray-700">
-              <button
+              <Button
                 type="button"
-                className="btn btn-sm btn-cancel mt-2 flex items-center"
+                size="sm"
+                color="secondary"
+                variant="ghost"
                 onClick={onClose}
                 disabled={isExporting}
+                className="mt-2 mr-2"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="btn btn-sm btn-secondary mt-2 flex items-center"
+                size="sm"
                 onClick={handleExport}
                 disabled={isExporting || selectedCount === 0}
+                className="mt-2"
               >
                 {isExporting ? 'Exporting...' : `Export ${selectedCount || ''} Environment${selectedCount !== 1 ? 's' : ''}`}
-              </button>
+              </Button>
             </div>
           </div>
         </Modal>

@@ -1,23 +1,24 @@
-import 'github-markdown-css/github-markdown.css';
 import get from 'lodash/get';
 import { updateFolderDocs } from 'providers/ReduxStore/slices/collections';
-import { useTheme } from 'providers/Theme';
-import { useState } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
+import { useDispatch } from 'react-redux';
 import { saveFolderRoot } from 'providers/ReduxStore/slices/collections/actions';
-import Markdown from 'components/MarkDown';
-import CodeEditor from 'components/CodeEditor';
+import Button from 'ui/Button';
 import StyledWrapper from './StyledWrapper';
+import { usePersistedState } from 'hooks/usePersistedState';
+import { useDocsEditingState } from 'components/Documentation/useDocsEditingState';
+import DocsEditor from 'components/Documentation/DocsEditor';
 
 const Documentation = ({ collection, folder }) => {
   const dispatch = useDispatch();
-  const { displayedTheme } = useTheme();
-  const preferences = useSelector((state) => state.app.preferences);
-  const [isEditing, setIsEditing] = useState(false);
-  const docs = get(folder, 'root.docs', '');
+  const { isEditing, setEditing } = useDocsEditingState();
+  const docs = folder.draft ? get(folder, 'draft.docs', '') : get(folder, 'root.docs', '');
+
+  // Scroll tracking (both the rich-text preview/edit view and markdown mode's
+  // CodeEditor) lives in DocsEditor itself; this just owns the persisted value.
+  const [scroll, setScroll] = usePersistedState({ key: `folder-docs-scroll-${folder.uid}`, default: 0 });
 
   const toggleViewMode = () => {
-    setIsEditing((prev) => !prev);
+    setEditing(!isEditing);
   };
 
   const onEdit = (value) => {
@@ -37,27 +38,27 @@ const Documentation = ({ collection, folder }) => {
   }
 
   return (
-    <StyledWrapper className="mt-1 h-full w-full relative flex flex-col">
-      <div className="editing-mode flex justify-between items-center" role="tab" onClick={toggleViewMode}>
-        {isEditing ? 'Preview' : 'Edit'}
+    <StyledWrapper className="h-full w-full relative flex flex-col">
+      <div className="flex-1 min-h-0 flex flex-col">
+        <DocsEditor
+          docs={docs}
+          onEdit={onEdit}
+          onSave={onSave}
+          isEditing={isEditing}
+          collection={collection}
+          collectionPath={collection.pathname}
+          onRequestEdit={toggleViewMode}
+          initialScroll={scroll}
+          onScroll={setScroll}
+        />
       </div>
 
-      {isEditing ? (
-        <div className="mt-2 flex-1 max-h-[70vh]">
-          <CodeEditor
-            collection={collection}
-            theme={displayedTheme}
-            value={docs || ''}
-            onEdit={onEdit}
-            onSave={onSave}
-            mode="application/text"
-          />
-          <button type="submit" className="submit btn btn-sm btn-secondary my-6" onClick={onSave}>
+      {isEditing && (
+        <div className="mt-6 flex-shrink-0">
+          <Button type="submit" size="sm" onClick={onSave}>
             Save
-          </button>
+          </Button>
         </div>
-      ) : (
-        <Markdown collectionPath={collection.pathname} onDoubleClick={toggleViewMode} content={docs} />
       )}
     </StyledWrapper>
   );

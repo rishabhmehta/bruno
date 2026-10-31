@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
 import { Provider } from 'react-redux';
 import { AppProvider } from 'providers/App';
 import { ToastProvider } from 'providers/Toaster';
 import { HotkeysProvider } from 'providers/Hotkeys';
-
+import { PromptVariablesProvider } from 'providers/PromptVariables';
+import { SetAsVariableProvider } from 'providers/SetAsVariable';
 import ReduxStore from 'providers/ReduxStore';
 import ThemeProvider from 'providers/Theme/index';
 import ErrorBoundary from './ErrorBoundary';
@@ -44,11 +44,15 @@ function Main({ children }) {
       <Provider store={ReduxStore}>
         <ThemeProvider>
           <ToastProvider>
-            <AppProvider>
-              <HotkeysProvider>
-                {children}
-              </HotkeysProvider>
-            </AppProvider>
+            <PromptVariablesProvider>
+              <AppProvider>
+                <HotkeysProvider>
+                  <SetAsVariableProvider>
+                    {children}
+                  </SetAsVariableProvider>
+                </HotkeysProvider>
+              </AppProvider>
+            </PromptVariablesProvider>
           </ToastProvider>
         </ThemeProvider>
       </Provider>
@@ -57,5 +61,3 @@ function Main({ children }) {
 }
 
 export default Main;
-
-

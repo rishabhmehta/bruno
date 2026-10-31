@@ -1,5 +1,5 @@
 import each from 'lodash/each';
-import { invalidVariableCharacterRegex } from '../constants';  
+import { invalidVariableCharacterRegex } from '../constants';
 import { uuid } from '../common';
 
 const isSecret = (type) => {
@@ -9,12 +9,12 @@ const isSecret = (type) => {
 const importPostmanEnvironmentVariables = (brunoEnvironment, values = []) => {
   brunoEnvironment.variables = brunoEnvironment.variables || [];
 
-  each(values.filter(i => !(i.key == null && i.value == null)), (i) => {
+  each(values.filter((i) => !(i.key == null && i.value == null)), (i) => {
     const brunoEnvironmentVariable = {
       uid: uuid(),
       name: (i.key ?? '').replace(invalidVariableCharacterRegex, '_'),
       value: i.value ?? '',
-      enabled: i.enabled,
+      enabled: i.enabled ?? true,
       type: 'text',
       secret: isSecret(i.type)
     };
@@ -37,8 +37,7 @@ export const postmanToBrunoEnvironment = (postmanEnvironment) => {
   try {
     return importPostmanEnvironment(postmanEnvironment);
   } catch (err) {
-    console.log(err);
-    throw new Error('Unable to parse the postman environment json file');
+    throw new Error('Unable to parse the postman environment json file', { cause: err });
   }
 };
 

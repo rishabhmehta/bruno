@@ -1,11 +1,18 @@
 const { BrowserWindow } = require('electron');
 const { preferencesUtil } = require('../../store/preferences');
+const { getParamFromUrl } = require('../../utils/common');
 
 const matchesCallbackUrl = (url, callbackUrl) => {
-  return url ? url.href.startsWith(callbackUrl.href) : false;
+  if (!url) return false;
+  // Match the callback URL and require an OAuth2 response indicator
+  // (code query params for authorization code flow, or hash fragment for implicit flow).
+  // This prevents false matches on intermediate pages (e.g. /auth/login) when the
+  // callback URL is a root path like https://hostname/.
+  return url.href.startsWith(callbackUrl.href)
+    && (url.searchParams.has('code') || url.hash.length > 1);
 };
 
-const authorizeUserInWindow = ({ authorizeUrl, callbackUrl, session, additionalHeaders = {}, grantType = 'authorization_code' }) => {
+const authorizeUserInWindow = ({ authorizeUrl, callbackUrl, session, additionalHeaders = {}, grantType = 'authorization_code', expectedState = null }) => {
   return new Promise(async (resolve, reject) => {
     let finalUrl = null;
     let debugInfo = {
@@ -66,7 +73,7 @@ const authorizeUserInWindow = ({ authorizeUrl, callbackUrl, session, additionalH
           },
           fromCache: false,
           completed: true,
-          requests: [], // No sub-requests in this context
+          requests: [] // No sub-requests in this context
         };
         // Add to mainRequests
 
@@ -80,14 +87,14 @@ const authorizeUserInWindow = ({ authorizeUrl, callbackUrl, session, additionalH
 
     webSession.webRequest.onBeforeSendHeaders((details, callback) => {
       const { id: requestId, requestHeaders, method, url } = details;
-      
+
       if (details.resourceType === 'mainFrame' && Object.keys(additionalHeaders).length > 0) {
         // Add our custom headers
         for (const [name, value] of Object.entries(additionalHeaders)) {
           requestHeaders[name] = value;
         }
       }
-      
+
       if (currentMainRequest?.requestId === requestId) {
         currentMainRequest.request = {
           url,
@@ -128,15 +135,25 @@ const authorizeUserInWindow = ({ authorizeUrl, callbackUrl, session, additionalH
 
     function onWindowRedirect(url) {
       // Handle redirects as needed
+      let urlObj;
+      let callbackUrlObj;
 
-      // Check if redirect is to the callback URL and contains an authorization code
-      if (matchesCallbackUrl(new URL(url), new URL(callbackUrl))) {
-        finalUrl = url;
-        window.close();
+      try {
+        urlObj = new URL(url);
+      } catch (e) {
+        // Invalid redirect URL, skip processing
+        return;
       }
 
-      // Handle OAuth error responses
-      const urlObj = new URL(url);
+      try {
+        callbackUrlObj = new URL(callbackUrl);
+      } catch (e) {
+        // Invalid callback URL, skip matching but still check for errors below
+        callbackUrlObj = null;
+      }
+
+      // Handle OAuth error responses first, so we reject with
+      // a descriptive error instead of resolving with a null authorization code
       if (urlObj.searchParams.has('error')) {
         const error = urlObj.searchParams.get('error');
         const errorDescription = urlObj.searchParams.get('error_description');
@@ -149,6 +166,13 @@ const authorizeUserInWindow = ({ authorizeUrl, callbackUrl, session, additionalH
         };
         reject(new Error(JSON.stringify(errorData)));
         window.close();
+        return;
+      }
+
+      if (callbackUrlObj && matchesCallbackUrl(urlObj, callbackUrlObj)) {
+        finalUrl = url;
+        window.close();
+        return;
       }
     }
 
@@ -179,13 +203,25 @@ const authorizeUserInWindow = ({ authorizeUrl, callbackUrl, session, additionalH
 
       if (finalUrl) {
         try {
+          // Validate the state parameter to protect against CSRF / authorization
+          // code injection. State is always issued when a flow is initiated, so a
+          // missing expected or returned state means a forged/invalid callback —
+          // fail closed.
+          const finalUrlObj = new URL(finalUrl);
+          const returnedState = getParamFromUrl(finalUrlObj, 'state');
+          if (!expectedState || returnedState !== expectedState) {
+            return reject(
+              new Error('OAuth2 state mismatch: the returned state does not match the issued state.')
+            );
+          }
+
           // Handle different grant types differently
           if (grantType === 'implicit') {
             // For implicit flow, tokens are in the URL hash fragment
             const urlWithHash = new URL(finalUrl);
             const hash = urlWithHash.hash.substring(1); // Remove the leading #
             const hashParams = new URLSearchParams(hash);
-            
+
             // Extract tokens from hash fragment
             const implicitTokens = {
               access_token: hashParams.get('access_token'),
@@ -194,7 +230,7 @@ const authorizeUserInWindow = ({ authorizeUrl, callbackUrl, session, additionalH
               state: hashParams.get('state'),
               scope: hashParams.get('scope')
             };
-            
+
             return resolve({ implicitTokens, debugInfo });
           } else {
             // Default case - authorization code flow

@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useCallback, forwardRef, useState } from 'react';
+import get from 'lodash/get';
 import { useFormik } from 'formik';
 import * as Yup from 'yup';
 import toast from 'react-hot-toast';
@@ -21,6 +22,7 @@ import Help from 'components/Help';
 import StyledWrapper from './StyledWrapper';
 import SingleLineEditor from 'components/SingleLineEditor/index';
 import { useTheme } from 'styled-components';
+import Button from 'ui/Button';
 
 const NewRequest = ({ collectionUid, item, isEphemeral, onClose }) => {
   const dispatch = useDispatch();
@@ -29,9 +31,11 @@ const NewRequest = ({ collectionUid, item, isEphemeral, onClose }) => {
   const storedTheme = useTheme();
 
   const collection = useSelector((state) => state.collections.collections?.find((c) => c.uid === collectionUid));
-  const {
-    brunoConfig: { presets: collectionPresets = {} }
-  } = collection;
+  const collectionPresets = get(
+    collection,
+    collection?.draft?.brunoConfig ? 'draft.brunoConfig.presets' : 'brunoConfig.presets',
+    {}
+  );
   const [curlRequestTypeDetected, setCurlRequestTypeDetected] = useState(null);
   const [showFilesystemName, toggleShowFilesystemName] = useState(false);
 
@@ -145,12 +149,13 @@ const NewRequest = ({ collectionUid, item, isEphemeral, onClose }) => {
     onSubmit: (values) => {
       const isGrpcRequest = values.requestType === 'grpc-request';
       const isWsRequest = values.requestType === 'ws-request';
+      const filename = values.filename;
 
       if (isGrpcRequest) {
         dispatch(
           newGrpcRequest({
             requestName: values.requestName,
-            filename: values.filename,
+            filename: filename,
             requestType: values.requestType,
             requestUrl: values.requestUrl,
             collectionUid: collection.uid,
@@ -168,7 +173,7 @@ const NewRequest = ({ collectionUid, item, isEphemeral, onClose }) => {
         dispatch(newWsRequest({
           requestName: values.requestName,
           requestMethod: values.requestMethod,
-          filename: values.filename,
+          filename: filename,
           requestType: values.requestType,
           requestUrl: values.requestUrl,
           collectionUid: collection.uid,
@@ -185,7 +190,7 @@ const NewRequest = ({ collectionUid, item, isEphemeral, onClose }) => {
           newEphemeralHttpRequest({
             uid: uid,
             requestName: values.requestName,
-            filename: values.filename,
+            filename: filename,
             requestType: values.requestType,
             requestUrl: values.requestUrl,
             requestMethod: values.requestMethod,
@@ -205,12 +210,12 @@ const NewRequest = ({ collectionUid, item, isEphemeral, onClose }) => {
           .catch((err) => toast.error(err ? err.message : 'An error occurred while adding the request'));
       } else if (values.requestType === 'from-curl') {
         const request = getRequestFromCurlCommand(values.curlCommand, curlRequestTypeDetected);
-        const settings = { encodeUrl: false };
+        const settings = { encodeUrl: false, forwardAuthorizationHeader: false };
 
         dispatch(
           newHttpRequest({
             requestName: values.requestName,
-            filename: values.filename,
+            filename: filename,
             requestType: curlRequestTypeDetected,
             requestUrl: request.url,
             requestMethod: request.method,
@@ -231,7 +236,7 @@ const NewRequest = ({ collectionUid, item, isEphemeral, onClose }) => {
         dispatch(
           newHttpRequest({
             requestName: values.requestName,
-            filename: values.filename,
+            filename: filename,
             requestType: values.requestType,
             requestUrl: values.requestUrl,
             requestMethod: values.requestMethod,
@@ -311,15 +316,9 @@ const NewRequest = ({ collectionUid, item, isEphemeral, onClose }) => {
           <form
             className="bruno-form"
             onSubmit={formik.handleSubmit}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                formik.handleSubmit();
-              }
-            }}
           >
             <div>
-              <label htmlFor="requestName" className="block font-semibold">
+              <label htmlFor="requestName" className="block font-medium">
                 Type
               </label>
 
@@ -406,7 +405,7 @@ const NewRequest = ({ collectionUid, item, isEphemeral, onClose }) => {
               </div>
             </div>
             <div className="mt-4">
-              <label htmlFor="requestName" className="block font-semibold">
+              <label htmlFor="requestName" className="block font-medium">
                 Request Name
               </label>
               <input
@@ -428,13 +427,13 @@ const NewRequest = ({ collectionUid, item, isEphemeral, onClose }) => {
                 data-testid="request-name"
               />
               {formik.touched.requestName && formik.errors.requestName ? (
-                <div className="text-red-500">{formik.errors.requestName}</div>
+                <div className="text-red-500" data-testid="form-error">{formik.errors.requestName}</div>
               ) : null}
             </div>
             {showFilesystemName && (
               <div className="mt-4">
                 <div className="flex items-center justify-between">
-                  <label htmlFor="filename" className="flex items-center font-semibold">
+                  <label htmlFor="filename" className="flex items-center font-medium">
                     File Name <small className="font-normal text-muted ml-1">(on filesystem)</small>
                     <Help width="300">
                       <p>Bruno saves each request as a file in your collection's folder.</p>
@@ -457,6 +456,7 @@ const NewRequest = ({ collectionUid, item, isEphemeral, onClose }) => {
                       size={16}
                       strokeWidth={1.5}
                       onClick={() => toggleEditing(true)}
+                      data-testid="filename-edit-icon"
                     />
                   )}
                 </div>
@@ -467,7 +467,7 @@ const NewRequest = ({ collectionUid, item, isEphemeral, onClose }) => {
                       type="text"
                       name="filename"
                       placeholder="File Name"
-                      className={`!pr-10 block textbox mt-2 w-full`}
+                      className="!pr-10 block textbox mt-2 w-full"
                       autoComplete="off"
                       autoCorrect="off"
                       autoCapitalize="off"
@@ -476,30 +476,33 @@ const NewRequest = ({ collectionUid, item, isEphemeral, onClose }) => {
                       value={formik.values.filename || ''}
                       data-testid="file-name"
                     />
-                    <span className="absolute right-2 top-4 flex justify-center items-center file-extension">.bru</span>
+                    <span className="absolute right-2 top-4 flex justify-center items-center file-extension">.{collection.format}</span>
                   </div>
                 ) : (
                   <div className="relative flex flex-row gap-1 items-center justify-between">
-                    <PathDisplay baseName={formik.values.filename ? `${formik.values.filename}.bru` : ''} />
+                    <PathDisplay
+                      baseName={formik.values.filename ? `${formik.values.filename}.${collection.format}` : ''}
+                    />
                   </div>
                 )}
                 {formik.touched.filename && formik.errors.filename ? (
-                  <div className="text-red-500">{formik.errors.filename}</div>
+                  <div className="text-red-500" data-testid="form-error">{formik.errors.filename}</div>
                 ) : null}
               </div>
             )}
             {formik.values.requestType !== 'from-curl' ? (
               <>
                 <div className="mt-4">
-                  <label htmlFor="request-url" className="block font-semibold">
+                  <label htmlFor="request-url" className="block font-medium">
                     URL
                   </label>
                   <div className="flex items-center mt-2 ">
                     {!['grpc-request', 'ws-request'].includes(formik.values.requestType) ? (
-                      <div className="flex items-center h-full method-selector-container w-1/5">
+                      <div className="flex items-center h-full method-selector-container">
                         <HttpMethodSelector
                           method={formik.values.requestMethod}
                           onMethodSelect={(val) => formik.setFieldValue('requestMethod', val)}
+                          showCaret
                         />
                       </div>
                     ) : null}
@@ -509,6 +512,7 @@ const NewRequest = ({ collectionUid, item, isEphemeral, onClose }) => {
                       className="flex px-2 items-center flex-grow input-container h-full min-w-0"
                     >
                       <SingleLineEditor
+                        onRun={() => formik.handleSubmit()}
                         onPaste={handlePaste}
                         placeholder="Request URL"
                         value={formik.values.requestUrl || ''}
@@ -522,6 +526,7 @@ const NewRequest = ({ collectionUid, item, isEphemeral, onClose }) => {
                           });
                         }}
                         collection={collection}
+                        item={item}
                         variablesAutocomplete={true}
                       />
                     </div>
@@ -534,7 +539,7 @@ const NewRequest = ({ collectionUid, item, isEphemeral, onClose }) => {
             ) : (
               <div className="mt-4">
                 <div className="flex justify-between">
-                  <label htmlFor="request-url" className="block font-semibold">
+                  <label htmlFor="request-url" className="block font-medium">
                     cURL Command
                   </label>
                   <Dropdown className="dropdown" onCreate={onDropdownCreate} icon={<Icon />} placement="bottom-end">
@@ -565,7 +570,8 @@ const NewRequest = ({ collectionUid, item, isEphemeral, onClose }) => {
                   value={formik.values.curlCommand}
                   onChange={handleCurlCommandChange}
                   data-testid="curl-command"
-                ></textarea>
+                >
+                </textarea>
                 {formik.touched.curlCommand && formik.errors.curlCommand ? (
                   <div className="text-red-500">{formik.errors.curlCommand}</div>
                 ) : null}
@@ -587,16 +593,12 @@ const NewRequest = ({ collectionUid, item, isEphemeral, onClose }) => {
                 </Dropdown>
               </div>
               <div className="flex justify-end">
-                <span className="mr-2">
-                  <button type="button" onClick={onClose} className="btn btn-md btn-close">
-                    Cancel
-                  </button>
-                </span>
-                <span>
-                  <button type="submit" className="submit btn btn-md btn-secondary">
-                    Create
-                  </button>
-                </span>
+                <Button type="button" color="secondary" variant="ghost" onClick={onClose} className="mr-2">
+                  Cancel
+                </Button>
+                <Button type="submit" data-testid="create-new-request-button">
+                  Create
+                </Button>
               </div>
             </div>
           </form>
